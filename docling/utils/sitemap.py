@@ -5,7 +5,9 @@ from urllib.parse import urljoin
 import requests
 
 
-def get_sitemap_urls(base_url: str, sitemap_filename: str = "sitemap.xml") -> List[str]:
+def get_sitemap_urls(
+    base_url: str, sitemap_filename: str = "sitemap.xml"
+) -> List[str]:
     """Fetches and parses a sitemap XML file to extract URLs.
 
     Args:
@@ -56,4 +58,4 @@ def get_sitemap_urls(base_url: str, sitemap_filename: str = "sitemap.xml") -> Li
 
 
 if __name__ == "__main__":
-    print(get_sitemap_urls("https://ds4sd.github.io/docling/"))
+    print(get_sitemap_urls("https://www.underwoodlaw.net/"))
