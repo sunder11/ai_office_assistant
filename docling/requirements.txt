@@ -1,9 +1,1 @@
-requests
-ipykernel
-python-dotenv
-openai
-pydantic
-docling
-lancedb
-streamlit
-tiktoken
+pip install docling langchain-community langchain-groq langchain sentence-transformers faiss-cpu python-dotenv
