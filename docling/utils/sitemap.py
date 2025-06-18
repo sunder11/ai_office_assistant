@@ -6,7 +6,7 @@ import requests
 
 
 def get_sitemap_urls(
-    base_url: str, sitemap_filename: str = "sitemap.xml"
+    base_url: str, sitemap_filename: str = "googlesitemap.xml"
 ) -> List[str]:
     """Fetches and parses a sitemap XML file to extract URLs.
 

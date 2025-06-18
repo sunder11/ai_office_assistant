@@ -37,3 +37,5 @@ for result in conv_results_iter:
     if result.document:
         document = result.document
         docs.append(document)
+        markdown_output = document.export_to_markdown()
+        print(markdown_output)
