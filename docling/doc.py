@@ -1,6 +1,9 @@
 from docling.document_converter import DocumentConverter
 from utils.sitemap import get_sitemap_urls
 
+# ----------------------------------
+# covert pdf to text file.
+# ----------------------------------
 converter = DocumentConverter()
 
 source = "https://arxiv.org/pdf/2408.09869"  # document per local path or URL
