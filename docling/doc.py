@@ -3,6 +3,20 @@ from utils.sitemap import get_sitemap_urls
 
 converter = DocumentConverter()
 
+source = "https://arxiv.org/pdf/2408.09869"  # document per local path or URL
+result = converter.convert(source)
+
+# Print results to console
+print(result.document.export_to_markdown())
+
+print(result.document.export_to_dict())  # export to JSON
+
+# Save results to a text file
+with open("doclingtext.txt", "w", encoding="utf-8") as f:
+    f.write("\n\nMarkdown Conversion:\n")
+    f.write(result.document.export_to_markdown())
+
+
 # --------------------------------------------------------------
 # Basic PDF extraction
 # -------------------------------------------------------------

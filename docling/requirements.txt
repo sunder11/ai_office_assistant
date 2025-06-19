@@ -1,1 +1,0 @@
-pip install docling langchain-community langchain-groq langchain sentence-transformers faiss-cpu python-dotenv
