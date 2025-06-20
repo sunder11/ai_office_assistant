@@ -1051,7 +1051,7 @@ if "vectorstore" in st.session_state:
         # Add user message to chat history
         st.session_state.chat_history.append({"role": "user", "content": user_input})
         with st.chat_message("user"):
-            st.write("Stephen")
+            st.write("Lowly Human")
             st.markdown(user_input)
         # Generate assistant response
         with st.chat_message("assistant"):
