@@ -14,4 +14,6 @@ TO USE:
 Clone the Repository, Install the dependencies in Requirements.txt, Add Your GROQ_API_KEY="" to the .env file, and in the terminal run:<br>
 streamlit run /home/your_user_name/your_projects_folder/ai_office_assistant/docling/ai_office_assistant.py<br>
 
-You can fins some great batch utilities to pre-prepare your data at my other repository:<br>
+You can find some great batch utilities to pre-prepare your data at my other repository:<br>
+https://github.com/sunder11/Chunklings<br>
+So far: 
