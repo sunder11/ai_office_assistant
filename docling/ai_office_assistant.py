@@ -552,8 +552,8 @@ def setup_vectorstore(documents):
     embeddings = HuggingFaceEmbeddings()
     text_splitter = CharacterTextSplitter(
         separator="\n",
-        chunk_size=1000,
-        chunk_overlap=200,
+        chunk_size=1000,  # Increase chunk size to match the model's context window
+        chunk_overlap=200,  # Adjust overlap to ensure continuity
     )
     doc_chunks = text_splitter.split_documents(documents)
     vectorstore = FAISS.from_documents(doc_chunks, embeddings)
@@ -561,7 +561,11 @@ def setup_vectorstore(documents):
 
 
 def create_chain(vectorstore):
-    llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
+    llm = ChatGroq(
+        model="llama-3.3-70b-versatile",
+        temperature=0,
+        max_tokens=4096,  # Increase the context window to 4096 tokens
+    )
     retriever = vectorstore.as_retriever()
     memory = ConversationBufferMemory(
         llm=llm, output_key="answer", memory_key="chat_history", return_messages=True
