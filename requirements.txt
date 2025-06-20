@@ -1,13 +1,13 @@
-#pip install docling langchain-community langchain-groq langchain sentence-transformers faiss-cpu python-dotenv
-
 
 #pip install -r requirements.txt
-
+docling==2.37.0
 python-dotenv==1.0.1
 streamlit==1.37.0
+langchain==0.2.17
 langchain-community==0.2.10
 langchain-text-splitters==0.2.2
 langchain-groq==0.1.9
+langchain-core==0.2.43
 unstructured==0.15.0
 unstructured[pdf]==0.15.0
 
@@ -18,5 +18,8 @@ transformers==4.43.3
 sentence-transformers==3.0.1
 nltk==3.8.1
 
+urllib3==2.4.0
 
-#to use: in terminal: streamlit run /home/steve/ai_projects/law_agent/docling/chat_with_multiple_docs.py
+
+
+#to use: in terminal: streamlit run /home/steve/ai_projects/law_agent/docling/underwoodlaw.py
