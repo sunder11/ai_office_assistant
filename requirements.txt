@@ -1,5 +1,7 @@
 
-#pip install -r requirements.txt
+#pip install -r requirements.txt 
+#some are probably missing but pip install the missing ones.
+
 docling==2.37.0
 python-dotenv==1.0.1
 streamlit==1.37.0
@@ -22,4 +24,4 @@ urllib3==2.4.0
 
 
 
-#to use: in terminal: streamlit run /home/steve/ai_projects/law_agent/docling/underwoodlaw.py
+#to use: in terminal: streamlit run /home/steve/ai_projects/law_agent/docling/ai_office_assistant.py
