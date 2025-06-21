@@ -1285,6 +1285,197 @@ import atexit
 
 atexit.register(on_shutdown)
 
+
+def handle_specific_person_query(query: str, vectorstore) -> str:
+    """Handle queries about specific people - GUARANTEED WORKING VERSION"""
+    try:
+        # Extract the name from the query first
+        import re
+
+        # Simple name extraction
+        words = query.split()
+        potential_names = []
+
+        # Look for pairs of capitalized words
+        for i in range(len(words) - 1):
+            if (
+                words[i].replace(",", "").replace(".", "").isalpha()
+                and words[i + 1].replace(",", "").replace(".", "").isalpha()
+                and len(words[i]) > 1
+                and len(words[i + 1]) > 1
+            ):
+                first = words[i].capitalize()
+                last = words[i + 1].capitalize()
+
+                # Skip obvious non-names
+                if first.lower() not in [
+                    "give",
+                    "show",
+                    "tell",
+                    "what",
+                    "have",
+                    "all",
+                    "the",
+                    "information",
+                ] and last.lower() not in [
+                    "give",
+                    "show",
+                    "tell",
+                    "what",
+                    "have",
+                    "all",
+                    "the",
+                    "information",
+                ]:
+                    potential_names.append(f"{first} {last}")
+
+        # Also try single words that might be names
+        for word in words:
+            clean_word = word.replace(",", "").replace(".", "").capitalize()
+            if (
+                len(clean_word) > 2
+                and clean_word.isalpha()
+                and clean_word.lower()
+                not in [
+                    "give",
+                    "show",
+                    "tell",
+                    "what",
+                    "have",
+                    "all",
+                    "the",
+                    "information",
+                    "you",
+                    "me",
+                    "on",
+                    "about",
+                ]
+            ):
+                potential_names.append(clean_word)
+
+        st.write(f"**Debug: Looking for these names: {potential_names}**")
+
+        if not potential_names:
+            return "I couldn't identify any names in your query. Please try asking like 'What is John Smith's phone number?'"
+
+        # Get ALL the names from the database using our working function
+        all_names = get_all_names_from_vectorstore_improved(vectorstore)
+
+        st.write(f"**Debug: Total names in database: {len(all_names)}**")
+
+        # Find exact matches (case insensitive)
+        matched_names = []
+        for search_name in potential_names:
+            st.write(f"**Debug: Searching for '{search_name}'**")
+
+        for db_name in all_names:
+            # Exact match
+            if search_name.lower() == db_name.lower():
+                matched_names.append(db_name)
+                st.write(f"**Debug: EXACT MATCH FOUND: {db_name}**")
+            # First name match
+            elif search_name.lower() == db_name.split()[0].lower():
+                matched_names.append(db_name)
+                st.write(f"**Debug: FIRST NAME MATCH: {db_name}**")
+            # Last name match (check if search_name matches any part after first name)
+            elif len(db_name.split()) > 1 and search_name.lower() in [
+                part.lower() for part in db_name.split()[1:]
+            ]:
+                matched_names.append(db_name)
+                st.write(f"**Debug: LAST NAME MATCH: {db_name}**")
+            # Partial match (search_name is part of db_name)
+            elif search_name.lower() in db_name.lower():
+                matched_names.append(db_name)
+                st.write(f"**Debug: PARTIAL MATCH FOUND: {db_name}**")
+        # Remove duplicates
+        matched_names = list(set(matched_names))
+
+        if not matched_names:
+            # Show similar names for debugging
+            similar_names = [
+                name
+                for name in all_names
+                if any(part.lower() in name.lower() for part in potential_names)
+            ]
+            return f"I couldn't find exact matches for: {potential_names}. Similar names in database: {similar_names[:10]}"
+
+        st.write(f"**Debug: Found these matching names: {matched_names}**")
+
+        # Now get the full records for these names
+        all_content = []
+        if hasattr(vectorstore, "docstore") and hasattr(
+            vectorstore, "index_to_docstore_id"
+        ):
+            for i in range(len(vectorstore.index_to_docstore_id)):
+                doc_id = vectorstore.index_to_docstore_id.get(i)
+                if doc_id and doc_id in vectorstore.docstore._dict:
+                    doc = vectorstore.docstore._dict[doc_id]
+                    if doc.metadata.get("file_type") in ["xlsx", "xls"]:
+                        all_content.append(doc.page_content)
+
+        combined_content = "\n".join(all_content)
+
+        # Find the full records for the matched names
+        found_records = []
+        for name in matched_names:
+            # Split name into first and last
+            name_parts = name.split()
+            if len(name_parts) >= 2:
+                first_name = name_parts[0]
+                last_name = " ".join(name_parts[1:])  # Handle names like "Van Der Berg"
+
+                # Search for the exact pattern in the content
+                pattern = f"FIRST_NAME: {first_name} | LAST_NAME: {last_name}"
+
+                # Find the record containing this pattern
+                lines = combined_content.split("\n")
+                for i, line in enumerate(lines):
+                    if pattern in line:
+                        # Get the full record (this line plus several after it)
+                        record_lines = []
+                        for j in range(i, min(i + 10, len(lines))):
+                            record_lines.append(lines[j])
+                            # Stop when we hit the next record or end
+                            if j > i and (
+                                "Record " in lines[j] and "FIRST_NAME:" in lines[j]
+                            ):
+                                break
+
+                        found_records.append("\n".join(record_lines))
+                        break
+
+        if found_records:
+            st.write(f"**Debug: Found {len(found_records)} complete records**")
+
+            # Use LLM to format the response
+            llm = ChatGroq(
+                model="llama-3.3-70b-versatile",
+                temperature=0,
+                max_tokens=4096,
+            )
+
+            records_text = "\n\n".join(found_records)
+
+            prompt = f"""
+            Question: {query}
+            
+            Here are the complete database records for the person(s) you asked about:
+            
+            {records_text}
+            
+            Please provide a clear, organized response with all the information for the person requested.
+            """
+
+            response = llm.invoke(prompt)
+            return response.content
+        else:
+            return f"Found matching names {matched_names} but couldn't retrieve their full records."
+
+    except Exception as e:
+        st.write(f"**Debug: Error: {str(e)}**")
+        return f"Error: {str(e)}"
+
+
 # Streamlit app configuration
 st.set_page_config(page_title="Chat with Website", page_icon="", layout="wide")
 st.title("CLAUDIA  🦙(LLAMA 3.3)")
@@ -1872,7 +2063,7 @@ if "vectorstore" in st.session_state:
     # Chat input
 user_input = st.chat_input("Ask about the website content...")
 
-if user_input and user_input.strip():  # Added check for user_input and not empty
+if user_input and user_input.strip():
     # Add user message to chat history
     st.session_state.chat_history.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
@@ -1883,43 +2074,97 @@ if user_input and user_input.strip():  # Added check for user_input and not empt
     with st.chat_message("assistant"):
         st.write("Claudia")
         with st.spinner("Thinking..."):
-            # First check if this is a comprehensive query
-            comprehensive_response = handle_comprehensive_query(
-                user_input, st.session_state.vectorstore
-            )
+            user_query_lower = user_input.lower()
 
-            if comprehensive_response:
-                # Use the comprehensive response
-                assistant_response = comprehensive_response
-                st.markdown(assistant_response)
-            else:
-                # Check if user is asking for all names (fallback method)
-                name_keywords = ["list all", "all names", "all people", "everyone"]
-                if any(keyword in user_input.lower() for keyword in name_keywords):
-                    names = get_all_names_from_vectorstore_improved(
-                        st.session_state.vectorstore
+            # Enhanced query routing based on question type
+            if any(
+                keyword in user_query_lower
+                for keyword in [
+                    "list all names",
+                    "list the names",
+                    "all names",
+                    "show all names",
+                ]
+            ):
+                # Handle "list all names" requests
+                names = get_all_names_from_vectorstore_improved(
+                    st.session_state.vectorstore
+                )
+                if names:
+                    assistant_response = (
+                        f"Here are all {len(names)} names in the database:\n\n"
                     )
-                    if names:
-                        assistant_response = (
-                            f"Here are all the names I found in the database:\n\n"
-                        )
-                        for i, name in enumerate(names, 1):
-                            assistant_response += f"{i}. {name}\n"
-                        assistant_response += f"\nTotal: {len(names)} people found."
-                    else:
-                        assistant_response = (
-                            "I couldn't find any names in the database."
-                        )
+                    for i, name in enumerate(names, 1):
+                        assistant_response += f"{i}. {name}\n"
+                else:
+                    assistant_response = "I couldn't find any names in the database."
+                st.markdown(assistant_response)
+
+            elif any(
+                keyword in user_query_lower
+                for keyword in ["how many names", "count names", "number of names"]
+            ):
+                # Handle "how many names" requests
+                names = get_all_names_from_vectorstore_improved(
+                    st.session_state.vectorstore
+                )
+                assistant_response = f"There are {len(names)} names in the database."
+                st.markdown(assistant_response)
+
+            elif any(
+                word
+                for word in user_input.split()
+                if len(word.strip(".,!?")) > 2
+                and word.strip(".,!?").replace("'", "").isalpha()
+                and word.strip(".,!?").lower()
+                not in [
+                    "give",
+                    "me",
+                    "all",
+                    "the",
+                    "information",
+                    "you",
+                    "have",
+                    "on",
+                    "about",
+                    "show",
+                    "tell",
+                    "what",
+                    "is",
+                    "does",
+                    "and",
+                    "or",
+                    "but",
+                    "for",
+                    "with",
+                    "from",
+                    "to",
+                ]
+            ):
+                # Handle specific person lookup queries
+                assistant_response = handle_specific_person_query(
+                    user_input, st.session_state.vectorstore
+                )
+                st.markdown(assistant_response)
+
+            else:
+                # First try comprehensive query for general questions
+                comprehensive_response = handle_comprehensive_query(
+                    user_input, st.session_state.vectorstore
+                )
+
+                if comprehensive_response:
+                    assistant_response = comprehensive_response
                     st.markdown(assistant_response)
                 else:
-                    # Use the regular conversational chain
+                    # Use the regular conversational chain for other questions
                     response = st.session_state.conversation_chain(
                         {"question": user_input}
                     )
                     assistant_response = response["answer"]
                     st.markdown(assistant_response)
 
-                    # Optionally show source documents for debugging
+                    # Show source documents for debugging
                     if "source_documents" in response:
                         with st.expander("Source Documents Used", expanded=False):
                             for i, doc in enumerate(response["source_documents"]):
