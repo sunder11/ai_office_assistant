@@ -24,6 +24,7 @@ import datetime
 import threading
 from pathlib import Path
 import glob
+import re
 
 # Load the environment variables
 load_dotenv()
@@ -34,6 +35,47 @@ os.makedirs(DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(DATA_DIR, "website_data.db")
 # Thread-local storage for database connections
 _local = threading.local()
+
+
+def get_all_names_from_vectorstore(vectorstore):
+    """Extract all names from the vectorstore specifically"""
+    try:
+        all_names = set()  # Use set to avoid duplicates
+        # Access all documents in the vectorstore
+        if hasattr(vectorstore, "docstore") and hasattr(
+            vectorstore, "index_to_docstore_id"
+        ):
+            for i in range(len(vectorstore.index_to_docstore_id)):
+                doc_id = vectorstore.index_to_docstore_id.get(i)
+                if doc_id and doc_id in vectorstore.docstore._dict:
+                    doc = vectorstore.docstore._dict[doc_id]
+                    content = doc.page_content
+
+                    # Look for patterns that indicate names
+                    # Pattern 1: "FIRST_NAME: John | LAST_NAME: Doe"
+                    name_pattern1 = r"FIRST_NAME:\s*([^|]+)\s*\|\s*LAST_NAME:\s*([^|]+)"
+                    matches1 = re.findall(name_pattern1, content, re.IGNORECASE)
+                    for first, last in matches1:
+                        if first.strip() and last.strip():
+                            all_names.add(f"{first.strip()} {last.strip()}")
+
+                    # Pattern 2: "Record X: ... Name: Full Name"
+                    name_pattern2 = r"(?:Name|FULL_NAME):\s*([^|]+?)(?:\s*\||$)"
+                    matches2 = re.findall(name_pattern2, content, re.IGNORECASE)
+                    for name in matches2:
+                        name = name.strip()
+                        if name and not name.lower() in [
+                            "name",
+                            "full_name",
+                            "first_name",
+                            "last_name",
+                        ]:
+                            all_names.add(name)
+
+        return sorted(list(all_names))  # Return sorted list
+
+    except Exception as e:
+        return [f"Error extracting names: {str(e)}"]
 
 
 def get_db_connection():
@@ -56,7 +98,6 @@ def setup_database():
     """Set up SQLite database for document storage"""
     conn = get_db_connection()
     cursor = conn.cursor()
-
     # Create enhanced tables for all document types
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS websites (
@@ -65,7 +106,6 @@ def setup_database():
         processed_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
-
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS pages (
         id INTEGER PRIMARY KEY,
@@ -77,7 +117,6 @@ def setup_database():
         FOREIGN KEY (website_id) REFERENCES websites(id)
     )
     """)
-
     # New table for local documents
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS documents (
@@ -90,7 +129,6 @@ def setup_database():
         processed_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
-
     # Create table for chat history
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS chat_history (
@@ -100,7 +138,6 @@ def setup_database():
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
-
     conn.commit()
     return True
 
@@ -184,7 +221,6 @@ def load_processed_content(sitemap_url=None):
     cursor = conn.cursor()
     documents = []
     processed_urls = []
-
     # Load web pages
     if sitemap_url:
         cursor.execute(
@@ -198,7 +234,6 @@ def load_processed_content(sitemap_url=None):
         )
     else:
         cursor.execute("SELECT url, title, content FROM pages")
-
     results = cursor.fetchall()
     for url, title, content in results:
         doc = Document(
@@ -207,7 +242,6 @@ def load_processed_content(sitemap_url=None):
         )
         documents.append(doc)
         processed_urls.append(url)
-
     # Load local documents
     cursor.execute("SELECT file_path, file_name, content, file_type FROM documents")
     results = cursor.fetchall()
@@ -223,7 +257,6 @@ def load_processed_content(sitemap_url=None):
         )
         documents.append(doc)
         processed_urls.append(file_path)
-
     return documents, processed_urls
 
 
@@ -261,63 +294,6 @@ def load_chat_history():
         return []
 
 
-def process_document_file(file_path: str, file_type: str) -> Document:
-    """Process a single document file using appropriate method"""
-    try:
-        # Handle different file types with specialized functions
-        if file_type.lower() == "pptx":
-            return process_powerpoint_file(file_path)
-        elif file_type.lower() in ["xlsx", "xls"]:
-            return process_excel_file(file_path)
-        else:
-            # Use original Docling approach for other formats
-            converter = DocumentConverter()
-            result = converter.convert(file_path)
-            title = os.path.basename(file_path)
-
-            # Try to get the full text as markdown
-            try:
-                full_text = result.document.export_to_markdown()
-                if full_text and full_text.strip():
-                    return Document(
-                        page_content=full_text,
-                        metadata={
-                            "source": file_path,
-                            "file_name": title,
-                            "file_type": file_type,
-                            "format": "markdown",
-                        },
-                    )
-            except AttributeError:
-                pass
-
-            # If no markdown export, try to access content directly
-            if hasattr(result.document, "text"):
-                text_content = result.document.text
-            elif hasattr(result.document, "get_text"):
-                text_content = result.document.get_text()
-            elif hasattr(result, "text"):
-                text_content = result.text
-            else:
-                text_content = str(result.document)
-
-            if text_content and text_content.strip():
-                return Document(
-                    page_content=text_content,
-                    metadata={
-                        "source": file_path,
-                        "file_name": title,
-                        "file_type": file_type,
-                    },
-                )
-
-            return None
-
-    except Exception as e:
-        st.warning(f"Error processing file {file_path}: {str(e)}")
-        return None
-
-
 def process_powerpoint_file(file_path: str) -> Document:
     """Process a PowerPoint file and extract text content"""
     try:
@@ -326,7 +302,6 @@ def process_powerpoint_file(file_path: str) -> Document:
             converter = DocumentConverter()
             result = converter.convert(file_path)
             title = os.path.basename(file_path)
-
             # Try to get markdown format first
             try:
                 full_text = result.document.export_to_markdown()
@@ -342,7 +317,6 @@ def process_powerpoint_file(file_path: str) -> Document:
                     )
             except AttributeError:
                 pass
-
             # Try other content extraction methods
             if hasattr(result.document, "text"):
                 text_content = result.document.text
@@ -350,7 +324,6 @@ def process_powerpoint_file(file_path: str) -> Document:
                 text_content = result.document.get_text()
             else:
                 text_content = str(result.document)
-
             if text_content and text_content.strip():
                 return Document(
                     page_content=text_content,
@@ -363,21 +336,17 @@ def process_powerpoint_file(file_path: str) -> Document:
         except Exception:
             # If Docling fails, fall back to python-pptx
             pass
-
         # Fallback to manual extraction using python-pptx
         prs = Presentation(file_path)
         text_content = []
         slide_count = 0
-
         for slide_num, slide in enumerate(prs.slides, 1):
             slide_text = []
             slide_text.append(f"\n--- Slide {slide_num} ---\n")
-
             # Extract text from all shapes in the slide
             for shape in slide.shapes:
                 if hasattr(shape, "text") and shape.text.strip():
                     slide_text.append(shape.text.strip())
-
                 # Handle tables in slides
                 if shape.shape_type == 19:  # Table
                     try:
@@ -390,15 +359,12 @@ def process_powerpoint_file(file_path: str) -> Document:
                         slide_text.append("\n".join(table_text))
                     except:
                         pass
-
             if len(slide_text) > 1:  # More than just the slide header
                 text_content.extend(slide_text)
                 slide_count += 1
-
         if text_content:
             full_text = "\n".join(text_content)
             title = os.path.basename(file_path)
-
             return Document(
                 page_content=full_text,
                 metadata={
@@ -409,24 +375,103 @@ def process_powerpoint_file(file_path: str) -> Document:
                     "extraction_method": "python-pptx",
                 },
             )
-
         return None
-
     except Exception as e:
         st.warning(f"Error processing PowerPoint file {file_path}: {str(e)}")
         return None
 
 
 def process_excel_file(file_path: str) -> Document:
-    """Process an Excel file and extract content from all sheets"""
+    """Process an Excel file with better structure preservation"""
     try:
-        # First try with Docling
+        text_content = []
+        sheet_count = 0
         try:
+            excel_file = pd.ExcelFile(file_path, engine="openpyxl")
+        except:
+            try:
+                excel_file = pd.ExcelFile(file_path, engine="xlrd")
+            except:
+                excel_file = pd.ExcelFile(file_path)
+        for sheet_name in excel_file.sheet_names:
+            try:
+                df = pd.read_excel(excel_file, sheet_name=sheet_name)
+                if df.empty:
+                    continue
+                sheet_text = [f"\n=== SHEET: {sheet_name} ===\n"]
+                # Add structured data representation
+                df_clean = df.fillna("")
+                # For name-related data, create a more structured format
+                if any(
+                    col.lower() in ["name", "first_name", "last_name", "full_name"]
+                    for col in df_clean.columns
+                ):
+                    sheet_text.append("STRUCTURED DATA - PEOPLE RECORDS:")
+                    sheet_text.append("-" * 40)
+                    for idx, row in df_clean.iterrows():
+                        row_parts = []
+                        for col, val in row.items():
+                            if str(val).strip():
+                                row_parts.append(f"{col}: {val}")
+                        if row_parts:
+                            sheet_text.append(
+                                f"Record {idx + 1}: {' | '.join(row_parts)}"
+                            )
+                else:
+                    # Standard table format for non-name data
+                    if not df_clean.columns.empty:
+                        headers = " | ".join(str(col) for col in df_clean.columns)
+                        sheet_text.append(f"COLUMNS: {headers}")
+                        sheet_text.append("-" * len(headers))
+                    for idx, row in df_clean.iterrows():
+                        row_text = " | ".join(
+                            str(val) for val in row.values if str(val).strip()
+                        )
+                        if row_text.strip():
+                            sheet_text.append(f"Row {idx + 1}: {row_text}")
+                sheet_text.append(
+                    f"\n[SHEET SUMMARY: {len(df)} total rows, {len(df.columns)} columns]"
+                )
+                sheet_text.append("=" * 50)
+                text_content.extend(sheet_text)
+                sheet_count += 1
+            except Exception as e:
+                st.warning(f"Error reading sheet '{sheet_name}': {str(e)}")
+                continue
+        if text_content:
+            full_text = "\n".join(text_content)
+            title = os.path.basename(file_path)
+            return Document(
+                page_content=full_text,
+                metadata={
+                    "source": file_path,
+                    "file_name": title,
+                    "file_type": "xlsx",
+                    "sheet_count": sheet_count,
+                    "extraction_method": "structured_pandas",
+                    "total_content_length": len(full_text),
+                },
+            )
+        return None
+    except Exception as e:
+        st.warning(f"Error processing Excel file {file_path}: {str(e)}")
+        return None
+
+
+def process_document_file(file_path: str, file_type: str) -> Document:
+    """Process a single document file using appropriate method"""
+    try:
+        # Handle different file types with specialized functions
+        if file_type.lower() == "pptx":
+            return process_powerpoint_file(file_path)
+        elif file_type.lower() in ["xlsx", "xls"]:
+            return process_excel_file(file_path)
+        else:
+            # Use original Docling approach for other formats
             converter = DocumentConverter()
             result = converter.convert(file_path)
             title = os.path.basename(file_path)
-
-            # Try to get markdown format first
+            # Try to get the full text as markdown
             try:
                 full_text = result.document.export_to_markdown()
                 if full_text and full_text.strip():
@@ -435,109 +480,33 @@ def process_excel_file(file_path: str) -> Document:
                         metadata={
                             "source": file_path,
                             "file_name": title,
-                            "file_type": "xlsx",
+                            "file_type": file_type,
                             "format": "markdown",
                         },
                     )
             except AttributeError:
                 pass
-
-            # Try other content extraction methods
+            # If no markdown export, try to access content directly
             if hasattr(result.document, "text"):
                 text_content = result.document.text
             elif hasattr(result.document, "get_text"):
                 text_content = result.document.get_text()
+            elif hasattr(result, "text"):
+                text_content = result.text
             else:
                 text_content = str(result.document)
-
             if text_content and text_content.strip():
                 return Document(
                     page_content=text_content,
                     metadata={
                         "source": file_path,
                         "file_name": title,
-                        "file_type": "xlsx",
+                        "file_type": file_type,
                     },
                 )
-        except Exception:
-            # If Docling fails, fall back to pandas
-            pass
-
-        # Fallback to manual extraction using pandas
-        text_content = []
-        sheet_count = 0
-
-        # Read all sheets from the Excel file
-        try:
-            # Try to read with openpyxl engine first (for .xlsx files)
-            excel_file = pd.ExcelFile(file_path, engine="openpyxl")
-        except:
-            try:
-                # Fallback to xlrd engine (for .xls files)
-                excel_file = pd.ExcelFile(file_path, engine="xlrd")
-            except:
-                # Last resort - try default
-                excel_file = pd.ExcelFile(file_path)
-
-        for sheet_name in excel_file.sheet_names:
-            try:
-                df = pd.read_excel(excel_file, sheet_name=sheet_name)
-
-                # Skip empty sheets
-                if df.empty:
-                    continue
-
-                sheet_text = [f"\n--- Sheet: {sheet_name} ---\n"]
-
-                # Convert DataFrame to string representation
-                # Remove NaN values and convert to string
-                df_clean = df.fillna("")
-
-                # Add column headers
-                if not df_clean.columns.empty:
-                    headers = " | ".join(str(col) for col in df_clean.columns)
-                    sheet_text.append(f"Headers: {headers}\n")
-
-                # Add row data (limit to first 100 rows to avoid too much data)
-                max_rows = min(100, len(df_clean))
-                for idx, row in df_clean.head(max_rows).iterrows():
-                    row_text = " | ".join(
-                        str(val) for val in row.values if str(val).strip()
-                    )
-                    if row_text.strip():
-                        sheet_text.append(row_text)
-
-                # Add summary info
-                sheet_text.append(
-                    f"\n[Sheet Summary: {len(df)} rows, {len(df.columns)} columns]"
-                )
-
-                text_content.extend(sheet_text)
-                sheet_count += 1
-
-            except Exception as e:
-                st.warning(f"Error reading sheet '{sheet_name}': {str(e)}")
-                continue
-
-        if text_content:
-            full_text = "\n".join(text_content)
-            title = os.path.basename(file_path)
-
-            return Document(
-                page_content=full_text,
-                metadata={
-                    "source": file_path,
-                    "file_name": title,
-                    "file_type": "xlsx",
-                    "sheet_count": sheet_count,
-                    "extraction_method": "pandas",
-                },
-            )
-
-        return None
-
+            return None
     except Exception as e:
-        st.warning(f"Error processing Excel file {file_path}: {str(e)}")
+        st.warning(f"Error processing file {file_path}: {str(e)}")
         return None
 
 
@@ -548,55 +517,41 @@ def process_local_directory(
     if not os.path.exists(directory_path):
         st.error(f"Directory not found: {directory_path}")
         return [], []
-
     # Get all files with the specified extension
     pattern = os.path.join(directory_path, f"*.{file_extension}")
     file_paths = glob.glob(pattern)
-
     if not file_paths:
         st.warning(f"No .{file_extension} files found in {directory_path}")
         return [], []
-
     st.success(f"Found {len(file_paths)} .{file_extension} files")
-
     # Limit number of files if specified
     if max_files and max_files < len(file_paths):
         st.info(f"Processing only {max_files} files out of {len(file_paths)}")
         file_paths = file_paths[:max_files]
-
     all_documents = []
     processed_files = []
-
     # Process each file
     progress_bar = st.progress(0)
     status_text = st.empty()
-
     for idx, file_path in enumerate(file_paths):
         status_text.text(
             f"Processing file {idx + 1}/{len(file_paths)}: {os.path.basename(file_path)}"
         )
-
         try:
             document = process_document_file(file_path, file_extension)
             if document:
                 all_documents.append(document)
                 processed_files.append(file_path)
-
             progress_bar.progress((idx + 1) / len(file_paths))
-
             # Add small delay to prevent overwhelming the system
             time.sleep(0.1)
-
         except Exception as e:
             st.warning(f"Failed to process {file_path}: {str(e)}")
             continue
-
     progress_bar.empty()
     status_text.empty()
-
     if not all_documents:
         st.error(f"No documents could be extracted from .{file_extension} files")
-
     return all_documents, processed_files
 
 
@@ -670,8 +625,6 @@ def process_url_with_docling(url: str, temp_dir: str) -> Document:
         # Extract page title if possible
         title = url
         try:
-            import re
-
             title_match = re.search("<title>(.*?)</title>", html_content, re.IGNORECASE)
             if title_match:
                 title = title_match.group(1)
@@ -783,21 +736,35 @@ def process_sitemap(sitemap_url: str, max_urls: int = None):
 
 def setup_vectorstore(documents):
     embeddings = HuggingFaceEmbeddings()
-    text_splitter = CharacterTextSplitter(
-        separator="\n",
-        chunk_size=1000,  # Increase chunk size to match the model's context window
-        chunk_overlap=200,  # Adjust overlap to ensure continuity
-    )
-    doc_chunks = text_splitter.split_documents(documents)
+    # Different splitting strategy for different document types
+    doc_chunks = []
+    for doc in documents:
+        if doc.metadata.get("file_type") in ["xlsx", "xls"]:
+            # For Excel files, use larger chunks to preserve record integrity
+            text_splitter = CharacterTextSplitter(
+                separator="\n",
+                chunk_size=2000,  # Larger chunks for tabular data
+                chunk_overlap=100,  # Smaller overlap
+            )
+        else:
+            # Standard splitting for other documents
+            text_splitter = CharacterTextSplitter(
+                separator="\n",
+                chunk_size=1000,
+                chunk_overlap=200,
+            )
+        chunks = text_splitter.split_documents([doc])
+        doc_chunks.extend(chunks)
     vectorstore = FAISS.from_documents(doc_chunks, embeddings)
     return vectorstore
 
 
 def create_chain(vectorstore):
+    """Original create_chain function"""
     llm = ChatGroq(
         model="llama-3.3-70b-versatile",
         temperature=0,
-        max_tokens=4096,  # Increase the context window to 4096 tokens
+        max_tokens=4096,
     )
     retriever = vectorstore.as_retriever()
     memory = ConversationBufferMemory(
@@ -811,6 +778,87 @@ def create_chain(vectorstore):
         verbose=True,
     )
     return chain
+
+
+def create_chain_with_custom_retriever(vectorstore, k=20):
+    """Create a chain with a custom retriever that returns more results"""
+    llm = ChatGroq(
+        model="llama-3.3-70b-versatile",
+        temperature=0,
+        max_tokens=4096,
+    )
+    # Create a custom retriever that returns more documents
+    retriever = vectorstore.as_retriever(
+        search_type="similarity",
+        search_kwargs={"k": k},  # Return top k most similar chunks
+    )
+    memory = ConversationBufferMemory(
+        llm=llm, output_key="answer", memory_key="chat_history", return_messages=True
+    )
+    chain = ConversationalRetrievalChain.from_llm(
+        llm=llm,
+        retriever=retriever,
+        chain_type="map_reduce",  # Better for handling multiple documents
+        memory=memory,
+        verbose=True,
+        return_source_documents=True,  # This helps with debugging
+    )
+    return chain
+
+
+def handle_comprehensive_query(query: str, vectorstore) -> str:
+    """Handle queries that need to access all data, like 'list all names'"""
+    # Keywords that indicate a comprehensive query
+    comprehensive_keywords = [
+        "list all",
+        "all names",
+        "all people",
+        "everyone",
+        "complete list",
+        "full list",
+        "entire",
+        "total",
+        "every",
+    ]
+    is_comprehensive = any(
+        keyword in query.lower() for keyword in comprehensive_keywords
+    )
+    if is_comprehensive:
+        # Get ALL documents from the vectorstore
+        all_docs = []
+        # Access the vectorstore's document store directly
+        if hasattr(vectorstore, "docstore") and hasattr(
+            vectorstore, "index_to_docstore_id"
+        ):
+            for i in range(len(vectorstore.index_to_docstore_id)):
+                doc_id = vectorstore.index_to_docstore_id.get(i)
+                if doc_id and doc_id in vectorstore.docstore._dict:
+                    doc = vectorstore.docstore._dict[doc_id]
+                    all_docs.append(doc.page_content)
+        # Combine all document content
+        combined_content = "\n".join(all_docs)
+        # Create a specialized prompt for comprehensive queries
+        llm = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            temperature=0,
+            max_tokens=4096,
+        )
+        prompt = f"""
+        Based on the following complete dataset, please answer this query: {query}
+        
+        Dataset:
+        {combined_content[:15000]}  # Limit to avoid token limits
+        
+        Please provide a comprehensive answer based on ALL the data provided.
+        If the data is too large to process completely, please mention this and provide
+        what you can extract from the available portion.
+        """
+        try:
+            response = llm.invoke(prompt)
+            return response.content
+        except Exception as e:
+            return f"Error processing comprehensive query: {str(e)}"
+    return None  # Not a comprehensive query
 
 
 def initialize_storage():
@@ -836,30 +884,318 @@ def get_content_statistics():
     """Get statistics about processed content"""
     conn = get_db_connection()
     cursor = conn.cursor()
-
     stats = {}
-
     # Count web pages
     cursor.execute("SELECT COUNT(*) FROM pages")
     stats["web_pages"] = cursor.fetchone()[0]
-
     # Count documents by type
     cursor.execute("SELECT file_type, COUNT(*) FROM documents GROUP BY file_type")
     doc_counts = cursor.fetchall()
     for file_type, count in doc_counts:
         stats[f"{file_type}_files"] = count
-
     return stats
 
+
+def diagnose_excel_processing(file_path: str):
+    """Diagnostic function to show how Excel data is being processed"""
+    try:
+        st.write("## 📊 Excel Processing Diagnostics")
+        st.write(f"**Processing file: {os.path.basename(file_path)}**")
+
+        # Read the Excel file directly
+        try:
+            df = pd.read_excel(file_path, engine="openpyxl")
+        except Exception as e:
+            st.error(f"Error reading Excel file: {str(e)}")
+            return None, None
+
+        st.write(f"**Original Excel File:**")
+        st.write(f"- Total rows: {len(df)}")
+        st.write(f"- Total columns: {len(df.columns)}")
+        st.write(f"- Column names: {list(df.columns)}")
+
+        # Show first few rows
+        st.write("**First 5 rows of Excel data:**")
+        st.dataframe(df.head())
+
+        # Check for name-related columns
+        name_columns = [
+            col
+            for col in df.columns
+            if any(
+                name_word in col.lower()
+                for name_word in ["name", "first", "last", "client", "person"]
+            )
+        ]
+        if name_columns:
+            st.write(f"**Name-related columns found: {name_columns}**")
+        else:
+            st.write("**No obvious name columns found**")
+
+        # Process the file and show the document
+        st.write("**Processing file with process_excel_file function...**")
+        doc = process_excel_file(file_path)
+
+        if doc:
+            st.write(f"**Processed Document:**")
+            st.write(f"- Total content length: {len(doc.page_content)} characters")
+            st.write(f"- Metadata: {doc.metadata}")
+
+            # Show first part of processed content
+            st.write("**First 1000 characters of processed content:**")
+            st.text_area(
+                "Processed Content Preview", doc.page_content[:1000], height=200
+            )
+
+            # Show how it gets chunked
+            text_splitter = CharacterTextSplitter(
+                separator="\n",
+                chunk_size=2000,
+                chunk_overlap=100,
+            )
+            chunks = text_splitter.split_documents([doc])
+            st.write(f"**After Text Splitting:**")
+            st.write(f"- Number of chunks created: {len(chunks)}")
+
+            # Show chunk details
+            for i, chunk in enumerate(chunks[:3]):  # Show first 3 chunks
+                st.write(f"**Chunk {i + 1}:**")
+                st.write(f"- Length: {len(chunk.page_content)} characters")
+                st.text_area(
+                    f"Chunk {i + 1} Content",
+                    chunk.page_content[:500],
+                    height=150,
+                    key=f"chunk_{i}",
+                )
+
+            if len(chunks) > 3:
+                st.write(f"... and {len(chunks) - 3} more chunks")
+        else:
+            st.error("Failed to process the Excel file into a document")
+
+        return df, doc
+
+    except Exception as e:
+        st.error(f"Error in Excel diagnostics: {str(e)}")
+        st.exception(e)  # This will show the full traceback
+        return None, None
+
+
+def diagnose_vectorstore_content():
+    """Show what's actually in the vector store"""
+    if "vectorstore" not in st.session_state:
+        st.error("No vectorstore found!")
+        return
+
+    st.write("## 🔍 Vector Store Diagnostics")
+
+    vs = st.session_state.vectorstore
+    total_docs = 0
+    excel_chunks = 0
+
+    if hasattr(vs, "docstore") and hasattr(vs, "index_to_docstore_id"):
+        total_docs = len(vs.index_to_docstore_id)
+        st.write(f"**Total chunks in vector store: {total_docs}**")
+
+        # Analyze chunks by type
+        chunk_types = {}
+        excel_content_lengths = []
+
+        for i in range(len(vs.index_to_docstore_id)):
+            doc_id = vs.index_to_docstore_id.get(i)
+            if doc_id and doc_id in vs.docstore._dict:
+                doc = vs.docstore._dict[doc_id]
+                file_type = doc.metadata.get("file_type", "unknown")
+
+                if file_type not in chunk_types:
+                    chunk_types[file_type] = 0
+                chunk_types[file_type] += 1
+
+                if file_type in ["xlsx", "xls"]:
+                    excel_chunks += 1
+                    excel_content_lengths.append(len(doc.page_content))
+
+        st.write("**Chunks by file type:**")
+        for file_type, count in chunk_types.items():
+            st.write(f"- {file_type}: {count} chunks")
+
+        if excel_chunks > 0:
+            st.write(f"**Excel chunk details:**")
+            st.write(f"- Total Excel chunks: {excel_chunks}")
+            st.write(
+                f"- Average chunk size: {sum(excel_content_lengths) / len(excel_content_lengths):.0f} characters"
+            )
+            st.write(f"- Min chunk size: {min(excel_content_lengths)} characters")
+            st.write(f"- Max chunk size: {max(excel_content_lengths)} characters")
+
+            # Show some sample Excel chunks
+            st.write("**Sample Excel chunks:**")
+            count = 0
+            for i in range(len(vs.index_to_docstore_id)):
+                if count >= 3:  # Show first 3 Excel chunks
+                    break
+                doc_id = vs.index_to_docstore_id.get(i)
+                if doc_id and doc_id in vs.docstore._dict:
+                    doc = vs.docstore._dict[doc_id]
+                    if doc.metadata.get("file_type") in ["xlsx", "xls"]:
+                        count += 1
+                        st.write(f"**Excel Chunk {count}:**")
+                        st.text_area(
+                            f"Content {count}",
+                            doc.page_content[:800],
+                            height=200,
+                            key=f"excel_chunk_{count}",
+                        )
+
+
+def improved_get_all_names_from_vectorstore_with_diagnostics(vectorstore):
+    """Enhanced name extraction with diagnostics - FIXED VERSION"""
+    try:
+        all_names = set()
+        all_content = []
+        processed_chunks = 0
+        pattern_matches = {}
+
+        st.write("## 🔎 Name Extraction Diagnostics")
+
+        if hasattr(vectorstore, "docstore") and hasattr(
+            vectorstore, "index_to_docstore_id"
+        ):
+            total_chunks = len(vectorstore.index_to_docstore_id)
+            st.write(f"**Total chunks to process: {total_chunks}**")
+
+            for i in range(total_chunks):
+                doc_id = vectorstore.index_to_docstore_id.get(i)
+                if doc_id and doc_id in vectorstore.docstore._dict:
+                    doc = vectorstore.docstore._dict[doc_id]
+
+                    # Only process Excel chunks
+                    if doc.metadata.get("file_type") in ["xlsx", "xls"]:
+                        content = doc.page_content
+                        all_content.append(content)
+                        processed_chunks += 1
+
+                        # Define patterns with their names for tracking
+                        patterns = {
+                            "first_last_pattern": r"FIRST_NAME:\s*([^|]+)\s*\|\s*LAST_NAME:\s*([^|]+)",
+                            "name_colon_pattern": r"(?:Name|FULL_NAME|Client):\s*([^|]+?)(?:\s*\||$)",
+                            "record_name_pattern": r"Record \d+:.*?(?:Name|FIRST_NAME|LAST_NAME|Client):\s*([^|]+?)(?:\s*\||$)",
+                            "title_name_pattern": r"(?:Mr\.|Mrs\.|Ms\.|Dr\.)\s+([A-Z][a-z]+\s+[A-Z][a-z]+)",
+                            "capitalized_names": r"\b([A-Z][a-z]{2,}\s+[A-Z][a-z]{2,})\b",
+                        }
+
+                        for pattern_name, pattern in patterns.items():
+                            if pattern_name not in pattern_matches:
+                                pattern_matches[pattern_name] = 0
+
+                            matches = re.findall(pattern, content, re.IGNORECASE)
+                            pattern_matches[pattern_name] += len(matches)
+
+                            # Handle different match types
+                            for match in matches:
+                                if pattern_name == "first_last_pattern":
+                                    # This returns tuples (first, last)
+                                    if isinstance(match, tuple) and len(match) == 2:
+                                        first, last = match
+                                        if first.strip() and last.strip():
+                                            full_name = (
+                                                f"{first.strip()} {last.strip()}"
+                                            )
+                                            if len(full_name) > 3 and not any(
+                                                word in full_name.lower()
+                                                for word in [
+                                                    "name",
+                                                    "first",
+                                                    "last",
+                                                    "column",
+                                                    "row",
+                                                ]
+                                            ):
+                                                all_names.add(full_name)
+                                else:
+                                    # These return single strings
+                                    name = (
+                                        match.strip()
+                                        if isinstance(match, str)
+                                        else str(match).strip()
+                                    )
+                                    if (
+                                        name
+                                        and len(name) > 3
+                                        and not any(
+                                            word in name.lower()
+                                            for word in [
+                                                "name",
+                                                "first",
+                                                "last",
+                                                "column",
+                                                "row",
+                                                "record",
+                                            ]
+                                        )
+                                    ):
+                                        all_names.add(name)
+
+            st.write(f"**Excel chunks processed: {processed_chunks}**")
+            st.write(f"**Total unique names found: {len(all_names)}**")
+
+            # Show pattern matching statistics
+            st.write("**Pattern matching results:**")
+            for pattern_name, count in pattern_matches.items():
+                st.write(f"- {pattern_name}: {count} matches")
+
+            # Show sample content for debugging
+            if all_content:
+                st.write("**Sample content being processed:**")
+                sample_content = all_content[0][:1500] if all_content else "No content"
+                st.text_area(
+                    "Sample Content",
+                    sample_content,
+                    height=300,
+                    key="sample_content_debug",
+                )
+
+                # Test patterns on sample content
+                st.write("**Testing patterns on sample content:**")
+                test_patterns = {
+                    "FIRST_NAME|LAST_NAME": r"FIRST_NAME:\s*([^|]+)\s*\|\s*LAST_NAME:\s*([^|]+)",
+                    "Name: Something": r"(?:Name|FULL_NAME):\s*([^|]+?)(?:\s*\||$)",
+                    "Record with names": r"Record \d+:.*?(?:Name|FIRST_NAME|LAST_NAME):\s*([^|]+?)(?:\s*\||$)",
+                }
+
+                for pattern_name, pattern in test_patterns.items():
+                    matches = re.findall(pattern, sample_content, re.IGNORECASE)
+                    st.write(f"**{pattern_name}**: Found {len(matches)} matches")
+                    if matches:
+                        st.write(f"Examples: {matches[:5]}")  # Show first 5 matches
+
+        return sorted(list(all_names))
+
+    except Exception as e:
+        st.error(f"Error in name extraction: {str(e)}")
+        st.exception(e)  # Show full traceback
+        return []
+
+
+def on_shutdown():
+    close_db_connection()
+
+
+# Register shutdown handler
+import atexit
+
+atexit.register(on_shutdown)
 
 # Streamlit app configuration
 st.set_page_config(page_title="Chat with Website", page_icon="", layout="wide")
 st.title("CLAUDIA  🦙(LLAMA 3.3)")
+
 # Initialize session state
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "processed_urls" not in st.session_state:
     st.session_state.processed_urls = []
+
 # Initialize storage when app starts
 if "storage_initialized" not in st.session_state:
     initialize_storage()
@@ -966,7 +1302,6 @@ with xlsx_options_col:
 
 # Process buttons
 col1, col2, col3, col4, col5, col6 = st.columns(6)
-
 with col1:
     process_sitemap_button = st.button(
         "Process Sitemap", type="primary", use_container_width=True
@@ -1136,15 +1471,53 @@ if process_xlsx_button and xlsx_dir:
     except Exception as e:
         st.error(f"Error processing Excel files: {str(e)}")
 
+# Add this right after the Excel processing section
+if "vectorstore" in st.session_state:
+    st.divider()
+    st.subheader("🔧 Diagnostics")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        if st.button("Diagnose Excel Processing"):
+            if xlsx_dir and os.path.exists(xlsx_dir):
+                files = glob.glob(os.path.join(xlsx_dir, "*.xlsx"))
+                if files:
+                    st.write(
+                        f"Found Excel files: {[os.path.basename(f) for f in files]}"
+                    )
+                    diagnose_excel_processing(files[0])
+                else:
+                    st.error(f"No .xlsx files found in {xlsx_dir}")
+            else:
+                st.error("Please enter a valid Excel directory path first")
+
+    with col2:
+        if st.button("Diagnose Vector Store"):
+            diagnose_vectorstore_content()
+
+    with col3:
+        if st.button("Diagnose Name Extraction"):
+            names = improved_get_all_names_from_vectorstore_with_diagnostics(
+                st.session_state.vectorstore
+            )
+            if names:
+                st.write(f"**All {len(names)} unique names found:**")
+                # Display in columns for better readability
+                cols = st.columns(3)
+                for i, name in enumerate(names):
+                    with cols[i % 3]:
+                        st.write(f"{i + 1}. {name}")
+            else:
+                st.warning("No names found or error occurred")
+
 # Show loaded documents/URLs in sidebar
 with st.sidebar:
     st.subheader("Processed Content")
     if st.session_state.processed_urls:
         # Get content statistics
         stats = get_content_statistics()
-
         st.write(f"**Total items:** {len(st.session_state.processed_urls)}")
-
         # Show breakdown by type
         if stats.get("web_pages", 0) > 0:
             st.write(f"📄 Web pages: {stats['web_pages']}")
@@ -1154,12 +1527,10 @@ with st.sidebar:
             st.write(f"📘 DOCX files: {stats['docx_files']}")
         if stats.get("pdf_files", 0) > 0:
             st.write(f"📕 PDF files: {stats['pdf_files']}")
-
         if stats.get("pptx_files", 0) > 0:
             st.write(f"📊 PowerPoint files: {stats['pptx_files']}")
         if stats.get("xlsx_files", 0) > 0:
             st.write(f"📈 Excel files: {stats['xlsx_files']}")
-
         with st.expander("View all items", expanded=False):
             for item in st.session_state.processed_urls:
                 if item.startswith("http"):
@@ -1167,9 +1538,10 @@ with st.sidebar:
                 else:
                     st.write(f"📁 {os.path.basename(item)}")
 
-                # Initialize confirmation state
+        # Initialize confirmation state
         if "db_delete_confirmation" not in st.session_state:
             st.session_state.db_delete_confirmation = False
+
         col1, col2 = st.columns(2)
         with col1:
             # Display different buttons based on confirmation state
@@ -1213,6 +1585,7 @@ with st.sidebar:
                 if st.button("No, Cancel"):
                     st.session_state.db_delete_confirmation = False
                     st.rerun()
+
         with col2:
             if st.button("Clear Chat History", type="secondary"):
                 # Clear only chat history
@@ -1245,10 +1618,8 @@ if "vectorstore" in st.session_state:
     export_container = st.container()
     with export_container:
         st.subheader("Data Export")
-
         # Create two columns for export buttons
         col1, col2 = st.columns(2)
-
         # Export Vector Database
         with col1:
             # Add export button for FAISS vectors
@@ -1340,15 +1711,11 @@ if "vectorstore" in st.session_state:
                         export_db_path = os.path.join(
                             DATA_DIR, "website_data_export.db"
                         )
-
                         # Close any existing connections before copying
                         close_db_connection()
-
                         # Copy the database file
                         shutil.copy2(DB_PATH, export_db_path)
-
                         st.success("SQLite database prepared for download!")
-
                         # Create download button for the SQLite file
                         with open(export_db_path, "rb") as file:
                             st.download_button(
@@ -1360,49 +1727,99 @@ if "vectorstore" in st.session_state:
                     except Exception as e:
                         st.error(f"Error exporting SQLite database: {str(e)}")
 
+
 # Initialize conversation chain if vectorstore exists
 if "vectorstore" in st.session_state and "conversation_chain" not in st.session_state:
-    st.session_state.conversation_chain = create_chain(st.session_state.vectorstore)
+    st.session_state.conversation_chain = create_chain_with_custom_retriever(
+        st.session_state.vectorstore,
+        k=50,  # Retrieve top 50 chunks
+    )
 
 # Chat interface
 if "vectorstore" in st.session_state:
     st.divider()
     st.subheader("Ask Claudia - Your AI Assistant")
+
     # Display chat history
     for message in st.session_state.chat_history:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
+
     # Chat input
     user_input = st.chat_input("Ask about the website content...")
+
     if user_input:
         # Add user message to chat history
         st.session_state.chat_history.append({"role": "user", "content": user_input})
         with st.chat_message("user"):
             st.write("Lowly Human")
             st.markdown(user_input)
+
         # Generate assistant response
         with st.chat_message("assistant"):
             st.write("Claudia")
             with st.spinner("Thinking..."):
-                response = st.session_state.conversation_chain({"question": user_input})
-                assistant_response = response["answer"]
-                st.markdown(assistant_response)
+                # First check if this is a comprehensive query
+                comprehensive_response = handle_comprehensive_query(
+                    user_input, st.session_state.vectorstore
+                )
+
+                if comprehensive_response:
+                    # Use the comprehensive response
+                    assistant_response = comprehensive_response
+                    st.markdown(assistant_response)
+                else:
+                    # Check if user is asking for all names (fallback method)
+                    if any(
+                        keyword in user_input.lower()
+                        for keyword in [
+                            "list all",
+                            "all names",
+                            "all people",
+                            "everyone",
+                        ]
+                    ):
+                        names = get_all_names_from_vectorstore(
+                            st.session_state.vectorstore
+                        )
+                        if names:
+                            assistant_response = (
+                                f"Here are all the names I found in the database:\n\n"
+                            )
+                            for i, name in enumerate(names, 1):
+                                assistant_response += f"{i}. {name}\n"
+                            assistant_response += f"\nTotal: {len(names)} people found."
+                        else:
+                            assistant_response = (
+                                "I couldn't find any names in the database."
+                            )
+                        st.markdown(assistant_response)
+                    else:
+                        # Use the regular conversational chain
+                        response = st.session_state.conversation_chain(
+                            {"question": user_input}
+                        )
+                        assistant_response = response["answer"]
+                        st.markdown(assistant_response)
+
+                        # Optionally show source documents for debugging
+                        if "source_documents" in response:
+                            with st.expander("Source Documents Used", expanded=False):
+                                for i, doc in enumerate(response["source_documents"]):
+                                    st.write(f"**Source {i + 1}:**")
+                                    st.write(
+                                        doc.page_content[:500] + "..."
+                                        if len(doc.page_content) > 500
+                                        else doc.page_content
+                                    )
+
                 # Add assistant response to chat history
                 st.session_state.chat_history.append(
                     {"role": "assistant", "content": assistant_response}
                 )
+
                 # Save chat history to database
                 save_chat_history(st.session_state.chat_history)
+
 else:
     st.info("Please process content from any of the sources above to start chatting")
-
-
-# Close database connection when app is done
-def on_shutdown():
-    close_db_connection()
-
-
-# Register shutdown handler
-import atexit
-
-atexit.register(on_shutdown)
