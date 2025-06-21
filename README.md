@@ -6,9 +6,7 @@ Vectorstores(langchain)/SQLite database. It also has the functionality to enter 
 Some features of the UI that runs in your browser include a button to delete all of the data in the database, a button to delete just the chat history, 6 fields to enter the path to your files directorys (.docx-word, pdf, html, .pptx-powerpoint, .xlsx-excel, .xml-sitemap link)
 with 6 separate buttons to upload each type of file to the database, and button to download the vector database and a button to download the SQLite database.<br>
 
-By default it is setup to use llama-3.3-70b-versatile with a chunk sizes based on document type and the UI runs at http://localhost:8501 
-
-Truth is I could not begin to decribe it because Claude-4-sonnet wrote 98% of it (see the "chat logs")
+By default it is setup to use llama-3.3-70b-versatile with a chunk sizes based on document type and the UI runs at http://localhost:8501. Claude wrote the code and did the fine tuning I just did what he said. 
 
 TO USE:
 
@@ -22,6 +20,6 @@ https://github.com/sunder11/Chunklings<br>
 You can batch convert, .wpd => .docx, copy all your pdf files in your myfiles folder/subfolders to one folder without overwriting any files with the same name
 and export your outlook.pst and outlook.ost files into individual html emails to be process by docling.<br>
 
-Thanks to claude-opus-4-20250514 for writing most of the 2000 lines of python code for about $16.00. It would have cost a lot less but I just started learning about AI and python about 2 weeks ago.I assume this will be helpful to someone but I really do not know. it seems to suit my needs. It works locally and I have yet to learn out to deploy in production.<br>
+Thanks to claude-opus-4-20250514 for writing most of the 2000 lines of python code for about $35.00. It would have cost a lot less but I just started learning about AI and python about 2 weeks ago.I assume this will be helpful to someone but I really do not know. it seems to suit my needs. It works locally and I have yet to learn out to deploy in production.<br>
 
 NOTE: Processing the PDF files is very slow if you are using the CPU ( I have an AMD Ryzen 7 3700x (8 cores) and 32g ram), but it works. Some kind of NViDIA GPU is probably a good Idea (RTX 3090 24g maybe).   
