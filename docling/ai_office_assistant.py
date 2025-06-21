@@ -37,11 +37,11 @@ DB_PATH = os.path.join(DATA_DIR, "website_data.db")
 _local = threading.local()
 
 
-def get_all_names_from_vectorstore(vectorstore):
-    """Extract all names from the vectorstore specifically"""
+def get_all_names_from_vectorstore_improved(vectorstore):
+    """Extract ONLY real names from the vectorstore - FIXED for real names with punctuation"""
     try:
-        all_names = set()  # Use set to avoid duplicates
-        # Access all documents in the vectorstore
+        all_names = set()
+
         if hasattr(vectorstore, "docstore") and hasattr(
             vectorstore, "index_to_docstore_id"
         ):
@@ -49,33 +49,72 @@ def get_all_names_from_vectorstore(vectorstore):
                 doc_id = vectorstore.index_to_docstore_id.get(i)
                 if doc_id and doc_id in vectorstore.docstore._dict:
                     doc = vectorstore.docstore._dict[doc_id]
-                    content = doc.page_content
 
-                    # Look for patterns that indicate names
-                    # Pattern 1: "FIRST_NAME: John | LAST_NAME: Doe"
-                    name_pattern1 = r"FIRST_NAME:\s*([^|]+)\s*\|\s*LAST_NAME:\s*([^|]+)"
-                    matches1 = re.findall(name_pattern1, content, re.IGNORECASE)
-                    for first, last in matches1:
-                        if first.strip() and last.strip():
-                            all_names.add(f"{first.strip()} {last.strip()}")
+                    # Only process Excel chunks
+                    if doc.metadata.get("file_type") in ["xlsx", "xls"]:
+                        content = doc.page_content
 
-                    # Pattern 2: "Record X: ... Name: Full Name"
-                    name_pattern2 = r"(?:Name|FULL_NAME):\s*([^|]+?)(?:\s*\||$)"
-                    matches2 = re.findall(name_pattern2, content, re.IGNORECASE)
-                    for name in matches2:
-                        name = name.strip()
-                        if name and not name.lower() in [
-                            "name",
-                            "full_name",
-                            "first_name",
-                            "last_name",
-                        ]:
-                            all_names.add(name)
+                        # ONLY use the most precise pattern for your data structure
+                        name_pattern = (
+                            r"FIRST_NAME:\s*([^|]+?)\s*\|\s*LAST_NAME:\s*([^|]+?)\s*\|"
+                        )
+                        matches = re.findall(name_pattern, content, re.IGNORECASE)
 
-        return sorted(list(all_names))  # Return sorted list
+                        for first, last in matches:
+                            first = first.strip()
+                            last = last.strip()
+
+                            # More realistic filtering for real names
+                            if (
+                                first
+                                and last
+                                and len(first) >= 2
+                                and len(last) >= 2
+                                and
+                                # Allow letters, spaces, periods, commas, apostrophes, hyphens
+                                re.match(r"^[A-Za-z\s\.\,\'\-]+$", first)
+                                and re.match(
+                                    r"^[A-Za-z\s\.\,\'\-IVX]+$", last
+                                )  # Allow Roman numerals
+                                and
+                                # Exclude obvious non-names
+                                not any(
+                                    word.lower() in first.lower()
+                                    for word in [
+                                        "record",
+                                        "structured",
+                                        "data",
+                                        "sheet",
+                                        "column",
+                                        "total",
+                                        "fee",
+                                    ]
+                                )
+                                and not any(
+                                    word.lower() in last.lower()
+                                    for word in [
+                                        "record",
+                                        "structured",
+                                        "data",
+                                        "sheet",
+                                        "column",
+                                        "total",
+                                        "fee",
+                                    ]
+                                )
+                                and
+                                # Must start with a letter
+                                first[0].isalpha()
+                                and last[0].isalpha()
+                            ):
+                                full_name = f"{first} {last}"
+                                all_names.add(full_name)
+
+        return sorted(list(all_names))
 
     except Exception as e:
-        return [f"Error extracting names: {str(e)}"]
+        st.error(f"Error extracting names: {str(e)}")
+        return []
 
 
 def get_db_connection():
@@ -1177,6 +1216,66 @@ def improved_get_all_names_from_vectorstore_with_diagnostics(vectorstore):
         return []
 
 
+def compare_counting_methods(vectorstore):
+    """Compare different ways of counting names"""
+    st.write("## 🔢 Name Counting Comparison")
+
+    # Method 1: Direct pattern matching on all content (like comprehensive query)
+    all_content = []
+    if hasattr(vectorstore, "docstore") and hasattr(
+        vectorstore, "index_to_docstore_id"
+    ):
+        for i in range(len(vectorstore.index_to_docstore_id)):
+            doc_id = vectorstore.index_to_docstore_id.get(i)
+            if doc_id and doc_id in vectorstore.docstore._dict:
+                doc = vectorstore.docstore._dict[doc_id]
+                if doc.metadata.get("file_type") in ["xlsx", "xls"]:
+                    all_content.append(doc.page_content)
+
+    combined_content = "\n".join(all_content)
+
+    # Count using the comprehensive query approach
+    import re
+
+    pattern = r"FIRST_NAME:\s*([^|]+?)\s*\|\s*LAST_NAME:\s*([^|]+?)\s*\|"
+    comprehensive_matches = re.findall(pattern, combined_content, re.IGNORECASE)
+
+    comprehensive_names = set()
+    for first, last in comprehensive_matches:
+        first, last = first.strip(), last.strip()
+        if first and last:
+            comprehensive_names.add(f"{first} {last}")
+
+    # Method 2: Using your improved function
+    improved_names = set(get_all_names_from_vectorstore_improved(vectorstore))
+
+    # Method 3: Raw pattern matching without filtering
+    raw_names = set()
+    for first, last in comprehensive_matches:
+        first, last = first.strip(), last.strip()
+        if first and last:
+            raw_names.add(f"{first} {last}")
+
+    st.write(
+        f"**Method 1 - Comprehensive Query Style**: {len(comprehensive_names)} names"
+    )
+    st.write(f"**Method 2 - Improved Function**: {len(improved_names)} names")
+    st.write(f"**Method 3 - Raw Pattern Matches**: {len(raw_names)} names")
+
+    # Show the difference
+    missing_from_improved = comprehensive_names - improved_names
+    if missing_from_improved:
+        st.write(
+            f"**Names in comprehensive but missing from improved ({len(missing_from_improved)}):**"
+        )
+        for name in sorted(list(missing_from_improved))[:10]:
+            st.write(f"- {name}")
+        if len(missing_from_improved) > 10:
+            st.write(f"... and {len(missing_from_improved) - 10} more")
+
+    return len(comprehensive_names), len(improved_names), len(raw_names)
+
+
 def on_shutdown():
     close_db_connection()
 
@@ -1510,6 +1609,31 @@ if "vectorstore" in st.session_state:
                         st.write(f"{i + 1}. {name}")
             else:
                 st.warning("No names found or error occurred")
+    with st.columns(4)[3]:  # Add a 4th column
+        if st.button("Test Improved Names"):
+            names = get_all_names_from_vectorstore_improved(
+                st.session_state.vectorstore
+            )
+            st.write(f"**Improved extraction found {len(names)} clean names:**")
+            if names:
+                # Display in columns for better readability
+                cols = st.columns(3)
+            for i, name in enumerate(names):
+                with cols[i % 3]:
+                    st.write(f"{i + 1}. {name}")
+        else:
+            st.warning("No names found")
+
+    # Add this as a new column/button
+    with st.columns(6)[5]:  # Or wherever you have space
+        if st.button("Compare Counting Methods"):
+            comp_count, imp_count, raw_count = compare_counting_methods(
+                st.session_state.vectorstore
+            )
+            st.write(
+                f"**Results**: Comprehensive: {comp_count}, Improved: {imp_count}, Raw: {raw_count}"
+            )
+
 
 # Show loaded documents/URLs in sidebar
 with st.sidebar:
@@ -1746,80 +1870,72 @@ if "vectorstore" in st.session_state:
             st.markdown(message["content"])
 
     # Chat input
-    user_input = st.chat_input("Ask about the website content...")
+user_input = st.chat_input("Ask about the website content...")
 
-    if user_input:
-        # Add user message to chat history
-        st.session_state.chat_history.append({"role": "user", "content": user_input})
-        with st.chat_message("user"):
-            st.write("Lowly Human")
-            st.markdown(user_input)
+if user_input and user_input.strip():  # Added check for user_input and not empty
+    # Add user message to chat history
+    st.session_state.chat_history.append({"role": "user", "content": user_input})
+    with st.chat_message("user"):
+        st.write("Lowly Human")
+        st.markdown(user_input)
 
-        # Generate assistant response
-        with st.chat_message("assistant"):
-            st.write("Claudia")
-            with st.spinner("Thinking..."):
-                # First check if this is a comprehensive query
-                comprehensive_response = handle_comprehensive_query(
-                    user_input, st.session_state.vectorstore
-                )
+    # Generate assistant response
+    with st.chat_message("assistant"):
+        st.write("Claudia")
+        with st.spinner("Thinking..."):
+            # First check if this is a comprehensive query
+            comprehensive_response = handle_comprehensive_query(
+                user_input, st.session_state.vectorstore
+            )
 
-                if comprehensive_response:
-                    # Use the comprehensive response
-                    assistant_response = comprehensive_response
+            if comprehensive_response:
+                # Use the comprehensive response
+                assistant_response = comprehensive_response
+                st.markdown(assistant_response)
+            else:
+                # Check if user is asking for all names (fallback method)
+                name_keywords = ["list all", "all names", "all people", "everyone"]
+                if any(keyword in user_input.lower() for keyword in name_keywords):
+                    names = get_all_names_from_vectorstore_improved(
+                        st.session_state.vectorstore
+                    )
+                    if names:
+                        assistant_response = (
+                            f"Here are all the names I found in the database:\n\n"
+                        )
+                        for i, name in enumerate(names, 1):
+                            assistant_response += f"{i}. {name}\n"
+                        assistant_response += f"\nTotal: {len(names)} people found."
+                    else:
+                        assistant_response = (
+                            "I couldn't find any names in the database."
+                        )
                     st.markdown(assistant_response)
                 else:
-                    # Check if user is asking for all names (fallback method)
-                    if any(
-                        keyword in user_input.lower()
-                        for keyword in [
-                            "list all",
-                            "all names",
-                            "all people",
-                            "everyone",
-                        ]
-                    ):
-                        names = get_all_names_from_vectorstore(
-                            st.session_state.vectorstore
-                        )
-                        if names:
-                            assistant_response = (
-                                f"Here are all the names I found in the database:\n\n"
-                            )
-                            for i, name in enumerate(names, 1):
-                                assistant_response += f"{i}. {name}\n"
-                            assistant_response += f"\nTotal: {len(names)} people found."
-                        else:
-                            assistant_response = (
-                                "I couldn't find any names in the database."
-                            )
-                        st.markdown(assistant_response)
-                    else:
-                        # Use the regular conversational chain
-                        response = st.session_state.conversation_chain(
-                            {"question": user_input}
-                        )
-                        assistant_response = response["answer"]
-                        st.markdown(assistant_response)
+                    # Use the regular conversational chain
+                    response = st.session_state.conversation_chain(
+                        {"question": user_input}
+                    )
+                    assistant_response = response["answer"]
+                    st.markdown(assistant_response)
 
-                        # Optionally show source documents for debugging
-                        if "source_documents" in response:
-                            with st.expander("Source Documents Used", expanded=False):
-                                for i, doc in enumerate(response["source_documents"]):
-                                    st.write(f"**Source {i + 1}:**")
-                                    st.write(
-                                        doc.page_content[:500] + "..."
-                                        if len(doc.page_content) > 500
-                                        else doc.page_content
-                                    )
+                    # Optionally show source documents for debugging
+                    if "source_documents" in response:
+                        with st.expander("Source Documents Used", expanded=False):
+                            for i, doc in enumerate(response["source_documents"]):
+                                st.write(f"**Source {i + 1}:**")
+                                st.write(
+                                    doc.page_content[:500] + "..."
+                                    if len(doc.page_content) > 500
+                                    else doc.page_content
+                                )
 
-                # Add assistant response to chat history
-                st.session_state.chat_history.append(
-                    {"role": "assistant", "content": assistant_response}
-                )
+            # Add assistant response to chat history
+            st.session_state.chat_history.append(
+                {"role": "assistant", "content": assistant_response}
+            )
 
-                # Save chat history to database
-                save_chat_history(st.session_state.chat_history)
-
+            # Save chat history to database
+            save_chat_history(st.session_state.chat_history)
 else:
     st.info("Please process content from any of the sources above to start chatting")
