@@ -21,6 +21,6 @@ https://github.com/sunder11/Chunklings<br>
 You can batch convert, .wpd => .docx, copy all your pdf files in your myfiles folder/subfolders to one folder without overwriting any files with the same name
 and export your outlook.pst and outlook.ost files into individual html emails to be process by docling.<br>
 
-Thanks to claude-opus-4-20250514 for writing most of the 1000 lines of python code for about $16.00. It would have cost a lot less but I just started learning about AI and python about 2 weeks ago.I assume this will be helpful to someone but I really do not know. it seems to suit my needs. It works locally and I have yet to learn out to deploy in production.<br>
+Thanks to claude-opus-4-20250514 for writing most of the 2000 lines of python code for about $16.00. It would have cost a lot less but I just started learning about AI and python about 2 weeks ago.I assume this will be helpful to someone but I really do not know. it seems to suit my needs. It works locally and I have yet to learn out to deploy in production.<br>
 
 NOTE: Processing the PDF files is very slow if you are using the CPU ( I have an AMD Ryzen 7 3700x (8 cores) and 32g ram), but it works. Some kind of NViDIA GPU is probably a good Idea (RTX 3090 24g maybe).   
