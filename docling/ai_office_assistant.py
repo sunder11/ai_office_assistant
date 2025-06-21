@@ -1,3 +1,7 @@
+# Add these imports with the existing ones
+from pptx import Presentation
+import pandas as pd
+import openpyxl
 import os
 from dotenv import load_dotenv
 import streamlit as st
@@ -258,53 +262,282 @@ def load_chat_history():
 
 
 def process_document_file(file_path: str, file_type: str) -> Document:
-    """Process a single document file using Docling"""
+    """Process a single document file using appropriate method"""
     try:
-        converter = DocumentConverter()
-        result = converter.convert(file_path)
+        # Handle different file types with specialized functions
+        if file_type.lower() == "pptx":
+            return process_powerpoint_file(file_path)
+        elif file_type.lower() in ["xlsx", "xls"]:
+            return process_excel_file(file_path)
+        else:
+            # Use original Docling approach for other formats
+            converter = DocumentConverter()
+            result = converter.convert(file_path)
+            title = os.path.basename(file_path)
 
-        # Extract filename as title
-        title = os.path.basename(file_path)
+            # Try to get the full text as markdown
+            try:
+                full_text = result.document.export_to_markdown()
+                if full_text and full_text.strip():
+                    return Document(
+                        page_content=full_text,
+                        metadata={
+                            "source": file_path,
+                            "file_name": title,
+                            "file_type": file_type,
+                            "format": "markdown",
+                        },
+                    )
+            except AttributeError:
+                pass
 
-        # Try to get the full text as markdown
-        try:
-            full_text = result.document.export_to_markdown()
-            if full_text and full_text.strip():
+            # If no markdown export, try to access content directly
+            if hasattr(result.document, "text"):
+                text_content = result.document.text
+            elif hasattr(result.document, "get_text"):
+                text_content = result.document.get_text()
+            elif hasattr(result, "text"):
+                text_content = result.text
+            else:
+                text_content = str(result.document)
+
+            if text_content and text_content.strip():
                 return Document(
-                    page_content=full_text,
+                    page_content=text_content,
                     metadata={
                         "source": file_path,
                         "file_name": title,
                         "file_type": file_type,
-                        "format": "markdown",
                     },
                 )
-        except AttributeError:
+
+            return None
+
+    except Exception as e:
+        st.warning(f"Error processing file {file_path}: {str(e)}")
+        return None
+
+
+def process_powerpoint_file(file_path: str) -> Document:
+    """Process a PowerPoint file and extract text content"""
+    try:
+        # First try with Docling (it might support PPTX)
+        try:
+            converter = DocumentConverter()
+            result = converter.convert(file_path)
+            title = os.path.basename(file_path)
+
+            # Try to get markdown format first
+            try:
+                full_text = result.document.export_to_markdown()
+                if full_text and full_text.strip():
+                    return Document(
+                        page_content=full_text,
+                        metadata={
+                            "source": file_path,
+                            "file_name": title,
+                            "file_type": "pptx",
+                            "format": "markdown",
+                        },
+                    )
+            except AttributeError:
+                pass
+
+            # Try other content extraction methods
+            if hasattr(result.document, "text"):
+                text_content = result.document.text
+            elif hasattr(result.document, "get_text"):
+                text_content = result.document.get_text()
+            else:
+                text_content = str(result.document)
+
+            if text_content and text_content.strip():
+                return Document(
+                    page_content=text_content,
+                    metadata={
+                        "source": file_path,
+                        "file_name": title,
+                        "file_type": "pptx",
+                    },
+                )
+        except Exception:
+            # If Docling fails, fall back to python-pptx
             pass
 
-        # If no markdown export, try to access content directly
-        if hasattr(result.document, "text"):
-            text_content = result.document.text
-        elif hasattr(result.document, "get_text"):
-            text_content = result.document.get_text()
-        elif hasattr(result, "text"):
-            text_content = result.text
-        else:
-            text_content = str(result.document)
+        # Fallback to manual extraction using python-pptx
+        prs = Presentation(file_path)
+        text_content = []
+        slide_count = 0
 
-        if text_content and text_content.strip():
+        for slide_num, slide in enumerate(prs.slides, 1):
+            slide_text = []
+            slide_text.append(f"\n--- Slide {slide_num} ---\n")
+
+            # Extract text from all shapes in the slide
+            for shape in slide.shapes:
+                if hasattr(shape, "text") and shape.text.strip():
+                    slide_text.append(shape.text.strip())
+
+                # Handle tables in slides
+                if shape.shape_type == 19:  # Table
+                    try:
+                        table_text = []
+                        for row in shape.table.rows:
+                            row_text = []
+                            for cell in row.cells:
+                                row_text.append(cell.text.strip())
+                            table_text.append(" | ".join(row_text))
+                        slide_text.append("\n".join(table_text))
+                    except:
+                        pass
+
+            if len(slide_text) > 1:  # More than just the slide header
+                text_content.extend(slide_text)
+                slide_count += 1
+
+        if text_content:
+            full_text = "\n".join(text_content)
+            title = os.path.basename(file_path)
+
             return Document(
-                page_content=text_content,
+                page_content=full_text,
                 metadata={
                     "source": file_path,
                     "file_name": title,
-                    "file_type": file_type,
+                    "file_type": "pptx",
+                    "slide_count": slide_count,
+                    "extraction_method": "python-pptx",
                 },
             )
 
         return None
+
     except Exception as e:
-        st.warning(f"Error processing file {file_path}: {str(e)}")
+        st.warning(f"Error processing PowerPoint file {file_path}: {str(e)}")
+        return None
+
+
+def process_excel_file(file_path: str) -> Document:
+    """Process an Excel file and extract content from all sheets"""
+    try:
+        # First try with Docling
+        try:
+            converter = DocumentConverter()
+            result = converter.convert(file_path)
+            title = os.path.basename(file_path)
+
+            # Try to get markdown format first
+            try:
+                full_text = result.document.export_to_markdown()
+                if full_text and full_text.strip():
+                    return Document(
+                        page_content=full_text,
+                        metadata={
+                            "source": file_path,
+                            "file_name": title,
+                            "file_type": "xlsx",
+                            "format": "markdown",
+                        },
+                    )
+            except AttributeError:
+                pass
+
+            # Try other content extraction methods
+            if hasattr(result.document, "text"):
+                text_content = result.document.text
+            elif hasattr(result.document, "get_text"):
+                text_content = result.document.get_text()
+            else:
+                text_content = str(result.document)
+
+            if text_content and text_content.strip():
+                return Document(
+                    page_content=text_content,
+                    metadata={
+                        "source": file_path,
+                        "file_name": title,
+                        "file_type": "xlsx",
+                    },
+                )
+        except Exception:
+            # If Docling fails, fall back to pandas
+            pass
+
+        # Fallback to manual extraction using pandas
+        text_content = []
+        sheet_count = 0
+
+        # Read all sheets from the Excel file
+        try:
+            # Try to read with openpyxl engine first (for .xlsx files)
+            excel_file = pd.ExcelFile(file_path, engine="openpyxl")
+        except:
+            try:
+                # Fallback to xlrd engine (for .xls files)
+                excel_file = pd.ExcelFile(file_path, engine="xlrd")
+            except:
+                # Last resort - try default
+                excel_file = pd.ExcelFile(file_path)
+
+        for sheet_name in excel_file.sheet_names:
+            try:
+                df = pd.read_excel(excel_file, sheet_name=sheet_name)
+
+                # Skip empty sheets
+                if df.empty:
+                    continue
+
+                sheet_text = [f"\n--- Sheet: {sheet_name} ---\n"]
+
+                # Convert DataFrame to string representation
+                # Remove NaN values and convert to string
+                df_clean = df.fillna("")
+
+                # Add column headers
+                if not df_clean.columns.empty:
+                    headers = " | ".join(str(col) for col in df_clean.columns)
+                    sheet_text.append(f"Headers: {headers}\n")
+
+                # Add row data (limit to first 100 rows to avoid too much data)
+                max_rows = min(100, len(df_clean))
+                for idx, row in df_clean.head(max_rows).iterrows():
+                    row_text = " | ".join(
+                        str(val) for val in row.values if str(val).strip()
+                    )
+                    if row_text.strip():
+                        sheet_text.append(row_text)
+
+                # Add summary info
+                sheet_text.append(
+                    f"\n[Sheet Summary: {len(df)} rows, {len(df.columns)} columns]"
+                )
+
+                text_content.extend(sheet_text)
+                sheet_count += 1
+
+            except Exception as e:
+                st.warning(f"Error reading sheet '{sheet_name}': {str(e)}")
+                continue
+
+        if text_content:
+            full_text = "\n".join(text_content)
+            title = os.path.basename(file_path)
+
+            return Document(
+                page_content=full_text,
+                metadata={
+                    "source": file_path,
+                    "file_name": title,
+                    "file_type": "xlsx",
+                    "sheet_count": sheet_count,
+                    "extraction_method": "pandas",
+                },
+            )
+
+        return None
+
+    except Exception as e:
+        st.warning(f"Error processing Excel file {file_path}: {str(e)}")
         return None
 
 
@@ -699,27 +932,64 @@ with pdf_options_col:
         help="Limit the number of PDF files to process",
     )
 
+# Local PowerPoint directory input
+pptx_col, pptx_options_col = st.columns([3, 1])
+with pptx_col:
+    pptx_dir = st.text_input(
+        "Enter path to PowerPoint files directory:",
+        placeholder="e.g., C:/Documents/pptx_files or /home/user/pptx_files",
+    )
+with pptx_options_col:
+    max_pptx_files = st.slider(
+        "Max PPTX files",
+        min_value=1,
+        max_value=100,
+        value=50,
+        help="Limit the number of PowerPoint files to process",
+    )
+
+# Local Excel directory input
+xlsx_col, xlsx_options_col = st.columns([3, 1])
+with xlsx_col:
+    xlsx_dir = st.text_input(
+        "Enter path to Excel files directory:",
+        placeholder="e.g., C:/Documents/xlsx_files or /home/user/xlsx_files",
+    )
+with xlsx_options_col:
+    max_xlsx_files = st.slider(
+        "Max Excel files",
+        min_value=1,
+        max_value=100,
+        value=50,
+        help="Limit the number of Excel files to process",
+    )
+
 # Process buttons
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5, col6 = st.columns(6)
 
 with col1:
     process_sitemap_button = st.button(
         "Process Sitemap", type="primary", use_container_width=True
     )
-
 with col2:
     process_html_button = st.button(
         "Process HTML Files", type="primary", use_container_width=True
     )
-
 with col3:
     process_docx_button = st.button(
         "Process DOCX Files", type="primary", use_container_width=True
     )
-
 with col4:
     process_pdf_button = st.button(
         "Process PDF Files", type="primary", use_container_width=True
+    )
+with col5:
+    process_pptx_button = st.button(
+        "Process PowerPoint Files", type="primary", use_container_width=True
+    )
+with col6:
+    process_xlsx_button = st.button(
+        "Process Excel Files", type="primary", use_container_width=True
     )
 
 # Process sitemap
@@ -818,6 +1088,54 @@ if process_pdf_button and pdf_dir:
     except Exception as e:
         st.error(f"Error processing PDF files: {str(e)}")
 
+# Process PowerPoint files
+if process_pptx_button and pptx_dir:
+    try:
+        documents, processed_files = process_local_directory(
+            pptx_dir, "pptx", max_pptx_files
+        )
+        if documents:
+            st.success(f"Successfully processed {len(documents)} PowerPoint files")
+            # Create or update vectorstore
+            if "vectorstore" not in st.session_state:
+                st.session_state.vectorstore = setup_vectorstore(documents)
+            else:
+                st.session_state.vectorstore.add_documents(documents)
+            # Save data to persistent storage
+            save_vectorstore(st.session_state.vectorstore)
+            save_local_documents(documents, processed_files, "pptx")
+            st.session_state.processed_urls.extend(processed_files)
+            # Show processed files
+            with st.expander("Processed PowerPoint Files", expanded=True):
+                for file_path in processed_files:
+                    st.write(os.path.basename(file_path))
+    except Exception as e:
+        st.error(f"Error processing PowerPoint files: {str(e)}")
+
+# Process Excel files
+if process_xlsx_button and xlsx_dir:
+    try:
+        documents, processed_files = process_local_directory(
+            xlsx_dir, "xlsx", max_xlsx_files
+        )
+        if documents:
+            st.success(f"Successfully processed {len(documents)} Excel files")
+            # Create or update vectorstore
+            if "vectorstore" not in st.session_state:
+                st.session_state.vectorstore = setup_vectorstore(documents)
+            else:
+                st.session_state.vectorstore.add_documents(documents)
+            # Save data to persistent storage
+            save_vectorstore(st.session_state.vectorstore)
+            save_local_documents(documents, processed_files, "xlsx")
+            st.session_state.processed_urls.extend(processed_files)
+            # Show processed files
+            with st.expander("Processed Excel Files", expanded=True):
+                for file_path in processed_files:
+                    st.write(os.path.basename(file_path))
+    except Exception as e:
+        st.error(f"Error processing Excel files: {str(e)}")
+
 # Show loaded documents/URLs in sidebar
 with st.sidebar:
     st.subheader("Processed Content")
@@ -836,6 +1154,11 @@ with st.sidebar:
             st.write(f"📘 DOCX files: {stats['docx_files']}")
         if stats.get("pdf_files", 0) > 0:
             st.write(f"📕 PDF files: {stats['pdf_files']}")
+
+        if stats.get("pptx_files", 0) > 0:
+            st.write(f"📊 PowerPoint files: {stats['pptx_files']}")
+        if stats.get("xlsx_files", 0) > 0:
+            st.write(f"📈 Excel files: {stats['xlsx_files']}")
 
         with st.expander("View all items", expanded=False):
             for item in st.session_state.processed_urls:
