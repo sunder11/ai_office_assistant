@@ -1044,6 +1044,53 @@ def create_chain_with_custom_retriever(vectorstore, k=20):
     return chain
 
 
+def initialize_storage():
+    """Initialize storage and load existing data"""
+    # Set up SQLite database
+    setup_database()
+    # Try to load existing vectorstore
+    vectorstore = load_vectorstore(DATA_DIR)
+    if vectorstore:
+        st.session_state.vectorstore = vectorstore
+        # Load URLs from database to session state
+        documents, urls = load_processed_content()
+        st.session_state.processed_urls = urls
+        # Load chat history if available
+        chat_history = load_chat_history()
+        if chat_history:
+            st.session_state.chat_history = chat_history
+        st.sidebar.success(f"Loaded {len(urls)} previously processed items")
+    return True
+
+
+def get_content_statistics():
+    """Get statistics about processed content"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    stats = {}
+    # Count web pages
+    cursor.execute("SELECT COUNT(*) FROM pages")
+    stats["web_pages"] = cursor.fetchone()[0]
+    # Count documents by type
+    cursor.execute("SELECT file_type, COUNT(*) FROM documents GROUP BY file_type")
+    doc_counts = cursor.fetchall()
+    for file_type, count in doc_counts:
+        stats[f"{file_type}_files"] = count
+    return stats
+
+
+def on_shutdown():
+    close_db_connection()
+
+
+# Register shutdown handler
+import atexit
+
+atexit.register(on_shutdown)
+
+##################### QUERY CONFIGURATION (begin) #################
+
+
 def handle_improved_query_routing(query: str, vectorstore) -> str:
     """Improved query routing with clearer logic"""
     try:
@@ -1112,54 +1159,6 @@ def handle_improved_query_routing(query: str, vectorstore) -> str:
 
     except Exception as e:
         return f"I encountered an error while processing your question: {str(e)}"
-
-
-def initialize_storage():
-    """Initialize storage and load existing data"""
-    # Set up SQLite database
-    setup_database()
-    # Try to load existing vectorstore
-    vectorstore = load_vectorstore(DATA_DIR)
-    if vectorstore:
-        st.session_state.vectorstore = vectorstore
-        # Load URLs from database to session state
-        documents, urls = load_processed_content()
-        st.session_state.processed_urls = urls
-        # Load chat history if available
-        chat_history = load_chat_history()
-        if chat_history:
-            st.session_state.chat_history = chat_history
-        st.sidebar.success(f"Loaded {len(urls)} previously processed items")
-    return True
-
-
-def get_content_statistics():
-    """Get statistics about processed content"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    stats = {}
-    # Count web pages
-    cursor.execute("SELECT COUNT(*) FROM pages")
-    stats["web_pages"] = cursor.fetchone()[0]
-    # Count documents by type
-    cursor.execute("SELECT file_type, COUNT(*) FROM documents GROUP BY file_type")
-    doc_counts = cursor.fetchall()
-    for file_type, count in doc_counts:
-        stats[f"{file_type}_files"] = count
-    return stats
-
-
-def on_shutdown():
-    close_db_connection()
-
-
-# Register shutdown handler
-import atexit
-
-atexit.register(on_shutdown)
-
-
-##################### QUERY CONFIGURATION (begin) #################
 
 
 def handle_specific_person_query(query: str, vectorstore) -> str:
@@ -1352,67 +1351,6 @@ def handle_specific_person_query(query: str, vectorstore) -> str:
         return f"Error: {str(e)}"
 
 
-def handle_intelligent_query(query: str, vectorstore) -> str:
-    """Intelligent query handler that routes to appropriate processing method"""
-    try:
-        query_lower = query.lower()
-
-        # 1. VERY SPECIFIC name listing queries only
-        if any(
-            phrase in query_lower
-            for phrase in [
-                "list all names",
-                "show all names",
-                "all names in",
-                "list the names",
-                "what names are",
-            ]
-        ):
-            names = get_all_names_from_vectorstore_improved(vectorstore)
-            if names:
-                return (
-                    f"Here are all {len(names)} names in the database:\n\n"
-                    + "\n".join([f"{i}. {name}" for i, name in enumerate(names, 1)])
-                )
-            else:
-                return "I couldn't find any names in the database."
-
-        # 2. Name count queries
-        elif any(
-            phrase in query_lower
-            for phrase in ["how many names", "count names", "number of names"]
-        ):
-            names = get_all_names_from_vectorstore_improved(vectorstore)
-            return f"There are {len(names)} names in the database."
-
-        # 3. Specific person queries (phone, email, contact info)
-        elif any(
-            phrase in query_lower
-            for phrase in ["phone number", "email", "contact", " tell me about "]
-        ) and any(
-            word.istitle() for word in query.split()
-        ):  # Contains capitalized names
-            return handle_specific_person_query(query, vectorstore)
-
-        # 4. Document-specific queries (summarize, agreement, etc.)
-        elif any(
-            phrase in query_lower
-            for phrase in ["summarize", "agreement", "contract", "document", "pdf"]
-        ):
-            return handle_document_query(query, vectorstore)
-
-        # 5. Everything else - use regular conversation chain
-        else:
-            if "conversation_chain" in st.session_state:
-                response = st.session_state.conversation_chain({"question": query})
-                return response["answer"]
-            else:
-                return "I don't have enough context to answer that question."
-
-    except Exception as e:
-        return f"I encountered an error while processing your question: {str(e)}"
-
-
 def handle_document_query(query: str, vectorstore) -> str:
     """Handle document-specific queries like summarization"""
     try:
@@ -1480,55 +1418,6 @@ Answer:
 
     except Exception as e:
         return f"Error processing document query: {str(e)}"
-
-
-def search_manual_content(query: str, vectorstore) -> str:
-    """Search specifically in manual content"""
-    try:
-        # Get only manual chunks
-        manual_chunks = []
-        if hasattr(vectorstore, "docstore") and hasattr(
-            vectorstore, "index_to_docstore_id"
-        ):
-            for i in range(len(vectorstore.index_to_docstore_id)):
-                doc_id = vectorstore.index_to_docstore_id.get(i)
-                if doc_id and doc_id in vectorstore.docstore._dict:
-                    doc = vectorstore.docstore._dict[doc_id]
-
-                    # Only get manual chunks
-                    if (
-                        doc.metadata.get("file_type") == "pdf"
-                        and "manual" in doc.metadata.get("source", "").lower()
-                    ):
-                        manual_chunks.append(doc.page_content)
-
-        if not manual_chunks:
-            return "I don't have any manual content available."
-
-        # Combine manual content
-        combined_manual = "\n".join(manual_chunks)
-
-        # Use LLM with manual content only
-        llm = ChatGroq(
-            model="llama-3.3-70b-versatile",
-            temperature=0,
-            max_tokens=4096,
-        )
-
-        prompt = f"""
-        Based on the following X570 AORUS ELITE motherboard manual content, please answer this question: {query}
-        
-        Manual Content:
-        {combined_manual[:15000]}  # Limit to avoid token limits
-        
-        Please provide a detailed answer based on the manual content above.
-        """
-
-        response = llm.invoke(prompt)
-        return response.content
-
-    except Exception as e:
-        return f"Error searching manual: {str(e)}"
 
     ###################### Query CONFIGURATION (end) #########################
 
