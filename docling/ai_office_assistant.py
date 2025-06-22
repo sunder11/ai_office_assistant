@@ -561,6 +561,9 @@ def process_pdf_with_intelligent_fallback(file_path: str) -> Document:
         st.write(f"**Processing PDF**: {os.path.basename(file_path)}")
 
         # First try regular Docling extraction
+        docling_success = False
+        docling_text = ""
+
         try:
             converter = DocumentConverter()
             result = converter.convert(file_path)
@@ -568,58 +571,171 @@ def process_pdf_with_intelligent_fallback(file_path: str) -> Document:
             # Try to get markdown format first
             try:
                 full_text = result.document.export_to_markdown()
-                if full_text and full_text.strip() and len(full_text) > 100:
-                    # Check if we got meaningful content (not just image placeholders)
-                    if (
-                        full_text.count("<!-- image -->") / len(full_text) < 0.1
-                    ):  # Less than 10% image tags
-                        st.write("✅ **Regular text extraction successful**")
-                        return Document(
-                            page_content=full_text,
-                            metadata={
-                                "source": file_path,
-                                "file_name": os.path.basename(file_path),
-                                "file_type": "pdf",
-                                "format": "markdown",
-                                "extraction_method": "docling",
-                            },
-                        )
+                if full_text and full_text.strip():
+                    docling_text = full_text
             except AttributeError:
                 pass
 
-            # Try other content extraction methods
-            if hasattr(result.document, "text"):
-                text_content = result.document.text
-            elif hasattr(result.document, "get_text"):
-                text_content = result.document.get_text()
-            else:
-                text_content = str(result.document)
+            # If no markdown, try other content extraction methods
+            if not docling_text:
+                if hasattr(result.document, "text"):
+                    docling_text = result.document.text
+                elif hasattr(result.document, "get_text"):
+                    docling_text = result.document.get_text()
+                else:
+                    docling_text = str(result.document)
 
-            # Check if we got meaningful text (more than just image tags)
-            if (
-                text_content
-                and len(text_content) > 100
-                and "<!-- image -->" not in text_content
-            ):
-                st.write("✅ **Regular text extraction successful**")
-                return Document(
-                    page_content=text_content,
-                    metadata={
-                        "source": file_path,
-                        "file_name": os.path.basename(file_path),
-                        "file_type": "pdf",
-                        "extraction_method": "docling",
-                    },
+            # NOW DO PROPER QUALITY CHECK
+            if docling_text and docling_text.strip():
+                # Check multiple indicators of poor extraction:
+                text_length = len(docling_text.strip())
+                image_tag_count = docling_text.count("<!-- image -->")
+                image_placeholder_count = docling_text.count("<image>")
+
+                # Calculate ratio of actual text vs placeholders
+                placeholder_chars = (image_tag_count * 15) + (
+                    image_placeholder_count * 7
+                )  # Approximate lengths
+                actual_text_ratio = (
+                    (text_length - placeholder_chars) / text_length
+                    if text_length > 0
+                    else 0
                 )
+
+                # Determine if extraction was successful based on multiple criteria:
+                if (
+                    text_length > 200  # Minimum meaningful length
+                    and actual_text_ratio > 0.3  # At least 30% actual text
+                    and image_tag_count
+                    < (text_length / 100)  # Not too many image tags relative to content
+                    and not (
+                        docling_text.strip() == "<!-- image -->"
+                        or docling_text.strip() == "<image>"
+                    )
+                ):  # Not just a single image tag
+                    docling_success = True
+                    st.write("✅ **Regular text extraction successful**")
+                    st.write(
+                        f"   📊 Extracted {text_length} characters with {actual_text_ratio:.1%} actual text"
+                    )
+                else:
+                    st.write("⚠️ **Regular extraction produced poor quality results**")
+                    st.write(
+                        f"   📊 Length: {text_length}, Image tags: {image_tag_count}, Text ratio: {actual_text_ratio:.1%}"
+                    )
+            else:
+                st.write("⚠️ **Regular extraction produced no text**")
+
         except Exception as e:
-            st.write(f"⚠️ **Regular extraction failed**: {str(e)}")
+            st.write(f"⚠️ **Regular extraction failed with error**: {str(e)}")
+
+        # If Docling was successful, return the result
+        if docling_success and docling_text:
+            return Document(
+                page_content=docling_text,
+                metadata={
+                    "source": file_path,
+                    "file_name": os.path.basename(file_path),
+                    "file_type": "pdf",
+                    "extraction_method": "docling",
+                    "text_length": len(docling_text),
+                },
+            )
 
         # If regular extraction failed or gave poor results, try OCR
-        st.write("🔍 **Falling back to OCR extraction...**")
-        return process_pdf_with_ocr_internal(file_path)
+        st.write("🔍 **Attempting OCR extraction as fallback...**")
+        ocr_result = process_pdf_with_ocr_internal(file_path)
+
+        if ocr_result:
+            st.write("✅ **OCR extraction successful**")
+            return ocr_result
+        else:
+            st.write("❌ **Both regular and OCR extraction failed**")
+            return None
 
     except Exception as e:
         st.warning(f"Error processing PDF {file_path}: {str(e)}")
+        return None
+
+
+def process_pdf_with_ocr_internal(file_path: str) -> Document:
+    """Internal OCR processing function with better status reporting"""
+    try:
+        # Check if OCR libraries are available
+        try:
+            import pytesseract
+            from pdf2image import convert_from_path
+            from PIL import Image
+        except ImportError as e:
+            st.error(f"❌ **OCR libraries not installed**: {e}")
+            st.write("Install with: `pip install pytesseract pillow pdf2image`")
+            return None
+
+        import tempfile
+        import os
+
+        # Convert PDF pages to images
+        with tempfile.TemporaryDirectory() as temp_dir:
+            try:
+                # Convert PDF to images
+                st.write("📄 **Converting PDF to images...**")
+                pages = convert_from_path(file_path, dpi=300)
+                st.write(f"📄 **Converted to {len(pages)} page images**")
+
+                extracted_text = []
+                successful_pages = 0
+
+                # Create a progress indicator
+                progress_placeholder = st.empty()
+
+                for i, page in enumerate(pages):
+                    progress_placeholder.write(
+                        f"🔍 **Processing page {i + 1}/{len(pages)}...**"
+                    )
+
+                    try:
+                        # Extract text using OCR
+                        page_text = pytesseract.image_to_string(
+                            page, config="--psm 6"
+                        )  # Better OCR config
+                        if page_text.strip():
+                            extracted_text.append(f"\n--- Page {i + 1} ---\n")
+                            extracted_text.append(page_text.strip())
+                            successful_pages += 1
+                    except Exception as e:
+                        st.write(f"❌ **OCR failed for page {i + 1}**: {str(e)}")
+                        continue
+
+                progress_placeholder.empty()
+
+                if extracted_text:
+                    full_text = "\n".join(extracted_text)
+                    st.write(f"✅ **OCR completed successfully!**")
+                    st.write(f"   📊 Processed {successful_pages}/{len(pages)} pages")
+                    st.write(f"   📊 Extracted {len(full_text)} characters")
+
+                    return Document(
+                        page_content=full_text,
+                        metadata={
+                            "source": file_path,
+                            "file_name": os.path.basename(file_path),
+                            "file_type": "pdf",
+                            "extraction_method": "ocr",
+                            "pages_processed": len(pages),
+                            "successful_pages": successful_pages,
+                            "text_length": len(full_text),
+                        },
+                    )
+                else:
+                    st.error("❌ **No text could be extracted via OCR from any page**")
+                    return None
+
+            except Exception as e:
+                st.error(f"❌ **PDF to image conversion failed**: {str(e)}")
+                return None
+
+    except Exception as e:
+        st.error(f"❌ **OCR processing failed**: {str(e)}")
         return None
 
 
