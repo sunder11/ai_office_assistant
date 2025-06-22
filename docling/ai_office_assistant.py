@@ -498,18 +498,22 @@ def process_excel_file(file_path: str) -> Document:
 
 
 def process_document_file(file_path: str, file_type: str) -> Document:
-    """Process a single document file using appropriate method"""
+    """Process a single document file using appropriate method with OCR fallback for PDFs"""
     try:
         # Handle different file types with specialized functions
         if file_type.lower() == "pptx":
             return process_powerpoint_file(file_path)
         elif file_type.lower() in ["xlsx", "xls"]:
             return process_excel_file(file_path)
+        elif file_type.lower() == "pdf":
+            # For PDFs, try Docling first, then OCR if needed
+            return process_pdf_with_intelligent_fallback(file_path)
         else:
             # Use original Docling approach for other formats
             converter = DocumentConverter()
             result = converter.convert(file_path)
             title = os.path.basename(file_path)
+
             # Try to get the full text as markdown
             try:
                 full_text = result.document.export_to_markdown()
@@ -525,6 +529,7 @@ def process_document_file(file_path: str, file_type: str) -> Document:
                     )
             except AttributeError:
                 pass
+
             # If no markdown export, try to access content directly
             if hasattr(result.document, "text"):
                 text_content = result.document.text
@@ -534,6 +539,7 @@ def process_document_file(file_path: str, file_type: str) -> Document:
                 text_content = result.text
             else:
                 text_content = str(result.document)
+
             if text_content and text_content.strip():
                 return Document(
                     page_content=text_content,
@@ -546,6 +552,146 @@ def process_document_file(file_path: str, file_type: str) -> Document:
             return None
     except Exception as e:
         st.warning(f"Error processing file {file_path}: {str(e)}")
+        return None
+
+
+def process_pdf_with_intelligent_fallback(file_path: str) -> Document:
+    """Process PDF with Docling first, then OCR fallback if needed"""
+    try:
+        st.write(f"**Processing PDF**: {os.path.basename(file_path)}")
+
+        # First try regular Docling extraction
+        try:
+            converter = DocumentConverter()
+            result = converter.convert(file_path)
+
+            # Try to get markdown format first
+            try:
+                full_text = result.document.export_to_markdown()
+                if full_text and full_text.strip() and len(full_text) > 100:
+                    # Check if we got meaningful content (not just image placeholders)
+                    if (
+                        full_text.count("<!-- image -->") / len(full_text) < 0.1
+                    ):  # Less than 10% image tags
+                        st.write("✅ **Regular text extraction successful**")
+                        return Document(
+                            page_content=full_text,
+                            metadata={
+                                "source": file_path,
+                                "file_name": os.path.basename(file_path),
+                                "file_type": "pdf",
+                                "format": "markdown",
+                                "extraction_method": "docling",
+                            },
+                        )
+            except AttributeError:
+                pass
+
+            # Try other content extraction methods
+            if hasattr(result.document, "text"):
+                text_content = result.document.text
+            elif hasattr(result.document, "get_text"):
+                text_content = result.document.get_text()
+            else:
+                text_content = str(result.document)
+
+            # Check if we got meaningful text (more than just image tags)
+            if (
+                text_content
+                and len(text_content) > 100
+                and "<!-- image -->" not in text_content
+            ):
+                st.write("✅ **Regular text extraction successful**")
+                return Document(
+                    page_content=text_content,
+                    metadata={
+                        "source": file_path,
+                        "file_name": os.path.basename(file_path),
+                        "file_type": "pdf",
+                        "extraction_method": "docling",
+                    },
+                )
+        except Exception as e:
+            st.write(f"⚠️ **Regular extraction failed**: {str(e)}")
+
+        # If regular extraction failed or gave poor results, try OCR
+        st.write("🔍 **Falling back to OCR extraction...**")
+        return process_pdf_with_ocr_internal(file_path)
+
+    except Exception as e:
+        st.warning(f"Error processing PDF {file_path}: {str(e)}")
+        return None
+
+
+def process_pdf_with_ocr_internal(file_path: str) -> Document:
+    """Internal OCR processing function (extracted from your existing code)"""
+    try:
+        import pytesseract
+        from pdf2image import convert_from_path
+        from PIL import Image
+        import tempfile
+        import os
+
+        st.write("🔍 **Starting OCR extraction...**")
+
+        # Convert PDF pages to images
+        with tempfile.TemporaryDirectory() as temp_dir:
+            try:
+                # Convert PDF to images
+                pages = convert_from_path(file_path, dpi=300)
+                st.write(f"📄 **Converted to {len(pages)} images**")
+
+                extracted_text = []
+                for i, page in enumerate(pages):
+                    st.write(f"🔍 **Processing page {i + 1}/{len(pages)}...**")
+                    # Save page as temporary image
+                    temp_image_path = os.path.join(temp_dir, f"page_{i + 1}.png")
+                    page.save(temp_image_path, "PNG")
+
+                    # Extract text using OCR
+                    try:
+                        page_text = pytesseract.image_to_string(page)
+                        if page_text.strip():
+                            extracted_text.append(f"\n--- Page {i + 1} ---\n")
+                            extracted_text.append(page_text.strip())
+                        else:
+                            st.write(f"⚠️ **No text found on page {i + 1}**")
+                    except Exception as e:
+                        st.write(f"❌ **OCR failed for page {i + 1}**: {str(e)}")
+                        continue
+
+                if extracted_text:
+                    full_text = "\n".join(extracted_text)
+                    st.write(
+                        f"✅ **OCR successful! Extracted {len(full_text)} characters**"
+                    )
+
+                    return Document(
+                        page_content=full_text,
+                        metadata={
+                            "source": file_path,
+                            "file_name": os.path.basename(file_path),
+                            "file_type": "pdf",
+                            "extraction_method": "ocr",
+                            "pages_processed": len(pages),
+                            "text_length": len(full_text),
+                        },
+                    )
+                else:
+                    st.error("❌ **No text could be extracted via OCR**")
+                    return None
+
+            except Exception as e:
+                st.error(f"❌ **PDF to image conversion failed**: {str(e)}")
+                return None
+
+    except ImportError:
+        st.error(
+            "❌ **OCR libraries not installed**. Please install: pip install pytesseract pillow pdf2image"
+        )
+        return None
+    except Exception as e:
+        st.error(f"❌ **OCR processing failed**: {str(e)}")
         return None
 
 
@@ -846,7 +992,7 @@ def create_chain_with_custom_retriever(vectorstore, k=20):
 
 
 def handle_comprehensive_query(query: str, vectorstore) -> str:
-    """Handle queries that need to access all data, like 'list all names'"""
+    """Handle comprehensive queries with ALL CRM data for person searches"""
     # Keywords that indicate a comprehensive query
     comprehensive_keywords = [
         "list all",
@@ -858,45 +1004,97 @@ def handle_comprehensive_query(query: str, vectorstore) -> str:
         "entire",
         "total",
         "every",
+        "tell me about",
+        "phone number",
+        "email",
+        "contact",
     ]
+
     is_comprehensive = any(
         keyword in query.lower() for keyword in comprehensive_keywords
     )
+
     if is_comprehensive:
-        # Get ALL documents from the vectorstore
         all_docs = []
-        # Access the vectorstore's document store directly
-        if hasattr(vectorstore, "docstore") and hasattr(
-            vectorstore, "index_to_docstore_id"
-        ):
-            for i in range(len(vectorstore.index_to_docstore_id)):
-                doc_id = vectorstore.index_to_docstore_id.get(i)
-                if doc_id and doc_id in vectorstore.docstore._dict:
-                    doc = vectorstore.docstore._dict[doc_id]
-                    all_docs.append(doc.page_content)
-        # Combine all document content
-        combined_content = "\n".join(all_docs)
-        # Create a specialized prompt for comprehensive queries
+
+        # Check if this is a person/CRM query
+        is_person_query = any(
+            word in query.lower()
+            for word in [
+                "robert",
+                "jason",
+                "christina",
+                "nicolas",
+                "phone",
+                "email",
+                "contact",
+                "tell me about",
+            ]
+        )
+
+        if is_person_query:
+            # For person queries, get ALL CRM chunks + some others
+            if hasattr(vectorstore, "docstore") and hasattr(
+                vectorstore, "index_to_docstore_id"
+            ):
+                # Get ALL CRM chunks
+                for i in range(len(vectorstore.index_to_docstore_id)):
+                    doc_id = vectorstore.index_to_docstore_id.get(i)
+                    if doc_id and doc_id in vectorstore.docstore._dict:
+                        doc = vectorstore.docstore._dict[doc_id]
+                        if doc.metadata.get("file_type") == "xlsx":
+                            all_docs.append(doc)
+
+                # Also get some relevant non-CRM docs
+                similarity_retriever = vectorstore.as_retriever(
+                    search_type="similarity", search_kwargs={"k": 10}
+                )
+                other_docs = similarity_retriever.get_relevant_documents(query)
+                for doc in other_docs:
+                    if doc.metadata.get("file_type") != "xlsx":
+                        all_docs.append(doc)
+        else:
+            # For non-person queries, use regular retrieval
+            similarity_retriever = vectorstore.as_retriever(
+                search_type="similarity", search_kwargs={"k": 40}
+            )
+            all_docs = similarity_retriever.get_relevant_documents(query)
+
+        # Combine all content
+        combined_content = "\n".join([doc.page_content for doc in all_docs])
+
+        # Create a specialized prompt
         llm = ChatGroq(
             model="llama-3.3-70b-versatile",
             temperature=0,
             max_tokens=4096,
         )
+
         prompt = f"""
-        Based on the following complete dataset, please answer this query: {query}
+        Question: {query}
         
-        Dataset:
-        {combined_content[:15000]}  # Limit to avoid token limits
+        Complete Database Content:
+        {combined_content[:25000]}
         
-        Please provide a comprehensive answer based on ALL the data provided.
-        If the data is too large to process completely, please mention this and provide
-        what you can extract from the available portion.
+        Answer the question based ONLY on the database content above. 
+        For CRM records, look for: "FIRST_NAME: [name] | LAST_NAME: [name] | ... | PHONE1: [number]"
+        
+        Instructions:
+        - Search through ALL the provided content carefully
+        - For person queries, look through all the CRM records to find the exact person
+        - For "list all" queries, extract ALL matching items from the content
+        - Do not use any external knowledge - only use the information provided above
+        - If you cannot find the information, say so clearly
+        
+        Answer:
         """
+
         try:
             response = llm.invoke(prompt)
             return response.content
         except Exception as e:
             return f"Error processing comprehensive query: {str(e)}"
+
     return None  # Not a comprehensive query
 
 
@@ -935,350 +1133,116 @@ def get_content_statistics():
     return stats
 
 
-def diagnose_excel_processing(file_path: str):
-    """Diagnostic function to show how Excel data is being processed"""
-    try:
-        st.write("## 📊 Excel Processing Diagnostics")
-        st.write(f"**Processing file: {os.path.basename(file_path)}**")
-
-        # Read the Excel file directly
-        try:
-            df = pd.read_excel(file_path, engine="openpyxl")
-        except Exception as e:
-            st.error(f"Error reading Excel file: {str(e)}")
-            return None, None
-
-        st.write(f"**Original Excel File:**")
-        st.write(f"- Total rows: {len(df)}")
-        st.write(f"- Total columns: {len(df.columns)}")
-        st.write(f"- Column names: {list(df.columns)}")
-
-        # Show first few rows
-        st.write("**First 5 rows of Excel data:**")
-        st.dataframe(df.head())
-
-        # Check for name-related columns
-        name_columns = [
-            col
-            for col in df.columns
-            if any(
-                name_word in col.lower()
-                for name_word in ["name", "first", "last", "client", "person"]
-            )
-        ]
-        if name_columns:
-            st.write(f"**Name-related columns found: {name_columns}**")
-        else:
-            st.write("**No obvious name columns found**")
-
-        # Process the file and show the document
-        st.write("**Processing file with process_excel_file function...**")
-        doc = process_excel_file(file_path)
-
-        if doc:
-            st.write(f"**Processed Document:**")
-            st.write(f"- Total content length: {len(doc.page_content)} characters")
-            st.write(f"- Metadata: {doc.metadata}")
-
-            # Show first part of processed content
-            st.write("**First 1000 characters of processed content:**")
-            st.text_area(
-                "Processed Content Preview", doc.page_content[:1000], height=200
-            )
-
-            # Show how it gets chunked
-            text_splitter = CharacterTextSplitter(
-                separator="\n",
-                chunk_size=2000,
-                chunk_overlap=100,
-            )
-            chunks = text_splitter.split_documents([doc])
-            st.write(f"**After Text Splitting:**")
-            st.write(f"- Number of chunks created: {len(chunks)}")
-
-            # Show chunk details
-            for i, chunk in enumerate(chunks[:3]):  # Show first 3 chunks
-                st.write(f"**Chunk {i + 1}:**")
-                st.write(f"- Length: {len(chunk.page_content)} characters")
-                st.text_area(
-                    f"Chunk {i + 1} Content",
-                    chunk.page_content[:500],
-                    height=150,
-                    key=f"chunk_{i}",
-                )
-
-            if len(chunks) > 3:
-                st.write(f"... and {len(chunks) - 3} more chunks")
-        else:
-            st.error("Failed to process the Excel file into a document")
-
-        return df, doc
-
-    except Exception as e:
-        st.error(f"Error in Excel diagnostics: {str(e)}")
-        st.exception(e)  # This will show the full traceback
-        return None, None
-
-
-def diagnose_vectorstore_content():
-    """Show what's actually in the vector store"""
-    if "vectorstore" not in st.session_state:
-        st.error("No vectorstore found!")
-        return
-
-    st.write("## 🔍 Vector Store Diagnostics")
-
-    vs = st.session_state.vectorstore
-    total_docs = 0
-    excel_chunks = 0
-
-    if hasattr(vs, "docstore") and hasattr(vs, "index_to_docstore_id"):
-        total_docs = len(vs.index_to_docstore_id)
-        st.write(f"**Total chunks in vector store: {total_docs}**")
-
-        # Analyze chunks by type
-        chunk_types = {}
-        excel_content_lengths = []
-
-        for i in range(len(vs.index_to_docstore_id)):
-            doc_id = vs.index_to_docstore_id.get(i)
-            if doc_id and doc_id in vs.docstore._dict:
-                doc = vs.docstore._dict[doc_id]
-                file_type = doc.metadata.get("file_type", "unknown")
-
-                if file_type not in chunk_types:
-                    chunk_types[file_type] = 0
-                chunk_types[file_type] += 1
-
-                if file_type in ["xlsx", "xls"]:
-                    excel_chunks += 1
-                    excel_content_lengths.append(len(doc.page_content))
-
-        st.write("**Chunks by file type:**")
-        for file_type, count in chunk_types.items():
-            st.write(f"- {file_type}: {count} chunks")
-
-        if excel_chunks > 0:
-            st.write(f"**Excel chunk details:**")
-            st.write(f"- Total Excel chunks: {excel_chunks}")
-            st.write(
-                f"- Average chunk size: {sum(excel_content_lengths) / len(excel_content_lengths):.0f} characters"
-            )
-            st.write(f"- Min chunk size: {min(excel_content_lengths)} characters")
-            st.write(f"- Max chunk size: {max(excel_content_lengths)} characters")
-
-            # Show some sample Excel chunks
-            st.write("**Sample Excel chunks:**")
-            count = 0
-            for i in range(len(vs.index_to_docstore_id)):
-                if count >= 3:  # Show first 3 Excel chunks
-                    break
-                doc_id = vs.index_to_docstore_id.get(i)
-                if doc_id and doc_id in vs.docstore._dict:
-                    doc = vs.docstore._dict[doc_id]
-                    if doc.metadata.get("file_type") in ["xlsx", "xls"]:
-                        count += 1
-                        st.write(f"**Excel Chunk {count}:**")
-                        st.text_area(
-                            f"Content {count}",
-                            doc.page_content[:800],
-                            height=200,
-                            key=f"excel_chunk_{count}",
-                        )
-
-
-def improved_get_all_names_from_vectorstore_with_diagnostics(vectorstore):
-    """Enhanced name extraction with diagnostics - FIXED VERSION"""
-    try:
-        all_names = set()
-        all_content = []
-        processed_chunks = 0
-        pattern_matches = {}
-
-        st.write("## 🔎 Name Extraction Diagnostics")
-
-        if hasattr(vectorstore, "docstore") and hasattr(
-            vectorstore, "index_to_docstore_id"
-        ):
-            total_chunks = len(vectorstore.index_to_docstore_id)
-            st.write(f"**Total chunks to process: {total_chunks}**")
-
-            for i in range(total_chunks):
-                doc_id = vectorstore.index_to_docstore_id.get(i)
-                if doc_id and doc_id in vectorstore.docstore._dict:
-                    doc = vectorstore.docstore._dict[doc_id]
-
-                    # Only process Excel chunks
-                    if doc.metadata.get("file_type") in ["xlsx", "xls"]:
-                        content = doc.page_content
-                        all_content.append(content)
-                        processed_chunks += 1
-
-                        # Define patterns with their names for tracking
-                        patterns = {
-                            "first_last_pattern": r"FIRST_NAME:\s*([^|]+)\s*\|\s*LAST_NAME:\s*([^|]+)",
-                            "name_colon_pattern": r"(?:Name|FULL_NAME|Client):\s*([^|]+?)(?:\s*\||$)",
-                            "record_name_pattern": r"Record \d+:.*?(?:Name|FIRST_NAME|LAST_NAME|Client):\s*([^|]+?)(?:\s*\||$)",
-                            "title_name_pattern": r"(?:Mr\.|Mrs\.|Ms\.|Dr\.)\s+([A-Z][a-z]+\s+[A-Z][a-z]+)",
-                            "capitalized_names": r"\b([A-Z][a-z]{2,}\s+[A-Z][a-z]{2,})\b",
-                        }
-
-                        for pattern_name, pattern in patterns.items():
-                            if pattern_name not in pattern_matches:
-                                pattern_matches[pattern_name] = 0
-
-                            matches = re.findall(pattern, content, re.IGNORECASE)
-                            pattern_matches[pattern_name] += len(matches)
-
-                            # Handle different match types
-                            for match in matches:
-                                if pattern_name == "first_last_pattern":
-                                    # This returns tuples (first, last)
-                                    if isinstance(match, tuple) and len(match) == 2:
-                                        first, last = match
-                                        if first.strip() and last.strip():
-                                            full_name = (
-                                                f"{first.strip()} {last.strip()}"
-                                            )
-                                            if len(full_name) > 3 and not any(
-                                                word in full_name.lower()
-                                                for word in [
-                                                    "name",
-                                                    "first",
-                                                    "last",
-                                                    "column",
-                                                    "row",
-                                                ]
-                                            ):
-                                                all_names.add(full_name)
-                                else:
-                                    # These return single strings
-                                    name = (
-                                        match.strip()
-                                        if isinstance(match, str)
-                                        else str(match).strip()
-                                    )
-                                    if (
-                                        name
-                                        and len(name) > 3
-                                        and not any(
-                                            word in name.lower()
-                                            for word in [
-                                                "name",
-                                                "first",
-                                                "last",
-                                                "column",
-                                                "row",
-                                                "record",
-                                            ]
-                                        )
-                                    ):
-                                        all_names.add(name)
-
-            st.write(f"**Excel chunks processed: {processed_chunks}**")
-            st.write(f"**Total unique names found: {len(all_names)}**")
-
-            # Show pattern matching statistics
-            st.write("**Pattern matching results:**")
-            for pattern_name, count in pattern_matches.items():
-                st.write(f"- {pattern_name}: {count} matches")
-
-            # Show sample content for debugging
-            if all_content:
-                st.write("**Sample content being processed:**")
-                sample_content = all_content[0][:1500] if all_content else "No content"
-                st.text_area(
-                    "Sample Content",
-                    sample_content,
-                    height=300,
-                    key="sample_content_debug",
-                )
-
-                # Test patterns on sample content
-                st.write("**Testing patterns on sample content:**")
-                test_patterns = {
-                    "FIRST_NAME|LAST_NAME": r"FIRST_NAME:\s*([^|]+)\s*\|\s*LAST_NAME:\s*([^|]+)",
-                    "Name: Something": r"(?:Name|FULL_NAME):\s*([^|]+?)(?:\s*\||$)",
-                    "Record with names": r"Record \d+:.*?(?:Name|FIRST_NAME|LAST_NAME):\s*([^|]+?)(?:\s*\||$)",
-                }
-
-                for pattern_name, pattern in test_patterns.items():
-                    matches = re.findall(pattern, sample_content, re.IGNORECASE)
-                    st.write(f"**{pattern_name}**: Found {len(matches)} matches")
-                    if matches:
-                        st.write(f"Examples: {matches[:5]}")  # Show first 5 matches
-
-        return sorted(list(all_names))
-
-    except Exception as e:
-        st.error(f"Error in name extraction: {str(e)}")
-        st.exception(e)  # Show full traceback
-        return []
-
-
-def compare_counting_methods(vectorstore):
-    """Compare different ways of counting names"""
-    st.write("## 🔢 Name Counting Comparison")
-
-    # Method 1: Direct pattern matching on all content (like comprehensive query)
-    all_content = []
-    if hasattr(vectorstore, "docstore") and hasattr(
-        vectorstore, "index_to_docstore_id"
-    ):
-        for i in range(len(vectorstore.index_to_docstore_id)):
-            doc_id = vectorstore.index_to_docstore_id.get(i)
-            if doc_id and doc_id in vectorstore.docstore._dict:
-                doc = vectorstore.docstore._dict[doc_id]
-                if doc.metadata.get("file_type") in ["xlsx", "xls"]:
-                    all_content.append(doc.page_content)
-
-    combined_content = "\n".join(all_content)
-
-    # Count using the comprehensive query approach
-    import re
-
-    pattern = r"FIRST_NAME:\s*([^|]+?)\s*\|\s*LAST_NAME:\s*([^|]+?)\s*\|"
-    comprehensive_matches = re.findall(pattern, combined_content, re.IGNORECASE)
-
-    comprehensive_names = set()
-    for first, last in comprehensive_matches:
-        first, last = first.strip(), last.strip()
-        if first and last:
-            comprehensive_names.add(f"{first} {last}")
-
-    # Method 2: Using your improved function
-    improved_names = set(get_all_names_from_vectorstore_improved(vectorstore))
-
-    # Method 3: Raw pattern matching without filtering
-    raw_names = set()
-    for first, last in comprehensive_matches:
-        first, last = first.strip(), last.strip()
-        if first and last:
-            raw_names.add(f"{first} {last}")
-
-    st.write(
-        f"**Method 1 - Comprehensive Query Style**: {len(comprehensive_names)} names"
-    )
-    st.write(f"**Method 2 - Improved Function**: {len(improved_names)} names")
-    st.write(f"**Method 3 - Raw Pattern Matches**: {len(raw_names)} names")
-
-    # Show the difference
-    missing_from_improved = comprehensive_names - improved_names
-    if missing_from_improved:
-        st.write(
-            f"**Names in comprehensive but missing from improved ({len(missing_from_improved)}):**"
-        )
-        for name in sorted(list(missing_from_improved))[:10]:
-            st.write(f"- {name}")
-        if len(missing_from_improved) > 10:
-            st.write(f"... and {len(missing_from_improved) - 10} more")
-
-    return len(comprehensive_names), len(improved_names), len(raw_names)
-
-
 def on_shutdown():
     close_db_connection()
 
+
+def debug_retrieval(query: str, vectorstore):
+    """Debug what chunks are being retrieved for a query"""
+    st.write("## 🔍 Retrieval Debug")
+
+    # Test the same retrieval as intelligent_rag_query
+    retriever = vectorstore.as_retriever(
+        search_type="mmr", search_kwargs={"k": 40, "fetch_k": 80, "lambda_mult": 0.3}
+    )
+
+    docs = retriever.get_relevant_documents(query)
+
+    st.write(f"**Query**: {query}")
+    st.write(f"**Retrieved {len(docs)} chunks:**")
+
+    # Analyze what types of chunks we got
+    chunk_types = {}
+    for doc in docs:
+        source = doc.metadata.get("source", "unknown")
+        file_type = doc.metadata.get("file_type", "unknown")
+
+        if "xlsx" in source.lower():
+            chunk_type = "CRM"
+        elif (
+            "agreement" in source.lower()
+            or doc.metadata.get("extraction_method") == "pymupdf_ocr"
+        ):
+            chunk_type = "Legal"
+        elif "manual" in source.lower():
+            chunk_type = "Manual"
+        else:
+            chunk_type = "Other"
+
+        if chunk_type not in chunk_types:
+            chunk_types[chunk_type] = 0
+        chunk_types[chunk_type] += 1
+
+    st.write("**Chunk breakdown:**")
+    for chunk_type, count in chunk_types.items():
+        st.write(f"- {chunk_type}: {count} chunks")
+
+    # Show first few chunks
+    st.write("**First 5 chunks:**")
+    for i, doc in enumerate(docs[:5]):
+        st.write(f"**Chunk {i + 1}:**")
+        st.write(f"- Source: {doc.metadata.get('source', 'unknown')}")
+        st.write(f"- Type: {doc.metadata.get('file_type', 'unknown')}")
+        st.write(f"- Content preview: {doc.page_content[:100]}...")
+        st.write("---")
+
+
+def debug_crm_chunks(query: str, vectorstore):
+    """Debug specifically what CRM records are being retrieved"""
+    st.write("## 🔍 CRM Records Debug")
+
+    retriever = vectorstore.as_retriever(
+        search_type="mmr", search_kwargs={"k": 40, "fetch_k": 80, "lambda_mult": 0.3}
+    )
+
+    docs = retriever.get_relevant_documents(query)
+
+    # Extract just the CRM chunks
+    crm_chunks = [doc for doc in docs if doc.metadata.get("file_type") == "xlsx"]
+
+    st.write(f"**Found {len(crm_chunks)} CRM chunks for query: '{query}'**")
+
+    # Parse and show names from CRM chunks
+    names_found = []
+    for i, doc in enumerate(crm_chunks):
+        content = doc.page_content
+
+        # Extract names from this chunk
+        import re
+
+        name_matches = re.findall(
+            r"FIRST_NAME:\s*([^|]+?)\s*\|\s*LAST_NAME:\s*([^|]+?)\s*\|", content
+        )
+
+        chunk_names = []
+        for first, last in name_matches:
+            full_name = f"{first.strip()} {last.strip()}"
+            chunk_names.append(full_name)
+            names_found.append(full_name)
+
+        if i < 5:  # Show first 5 chunks
+            st.write(f"**CRM Chunk {i + 1}** - Names: {chunk_names}")
+            st.text_area(
+                f"Content {i + 1}", content[:500], height=100, key=f"crm_debug_{i}"
+            )
+
+    # Check if Robert Earl specifically is in the retrieved names
+    st.write("---")
+    st.write(f"**All names found in retrieved CRM chunks:**")
+    unique_names = sorted(set(names_found))
+    for name in unique_names[:20]:  # Show first 20
+        if "robert" in name.lower() and "earl" in name.lower():
+            st.write(f"🎯 **{name}** ← TARGET FOUND!")
+        elif "robert" in name.lower():
+            st.write(f"👤 {name}")
+        else:
+            st.write(f"   {name}")
+
+    if len(unique_names) > 20:
+        st.write(f"... and {len(unique_names) - 20} more names")
+
+
+############################################### END DEBUG  ############
 
 # Register shutdown handler
 import atexit
@@ -1476,6 +1440,162 @@ def handle_specific_person_query(query: str, vectorstore) -> str:
         return f"Error: {str(e)}"
 
 
+def search_manual_content(query: str, vectorstore) -> str:
+    """Search specifically in manual content"""
+    try:
+        # Get only manual chunks
+        manual_chunks = []
+        if hasattr(vectorstore, "docstore") and hasattr(
+            vectorstore, "index_to_docstore_id"
+        ):
+            for i in range(len(vectorstore.index_to_docstore_id)):
+                doc_id = vectorstore.index_to_docstore_id.get(i)
+                if doc_id and doc_id in vectorstore.docstore._dict:
+                    doc = vectorstore.docstore._dict[doc_id]
+
+                    # Only get manual chunks
+                    if (
+                        doc.metadata.get("file_type") == "pdf"
+                        and "manual" in doc.metadata.get("source", "").lower()
+                    ):
+                        manual_chunks.append(doc.page_content)
+
+        if not manual_chunks:
+            return "I don't have any manual content available."
+
+        # Combine manual content
+        combined_manual = "\n".join(manual_chunks)
+
+        # Use LLM with manual content only
+        llm = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            temperature=0,
+            max_tokens=4096,
+        )
+
+        prompt = f"""
+        Based on the following X570 AORUS ELITE motherboard manual content, please answer this question: {query}
+        
+        Manual Content:
+        {combined_manual[:15000]}  # Limit to avoid token limits
+        
+        Please provide a detailed answer based on the manual content above.
+        """
+
+        response = llm.invoke(prompt)
+        return response.content
+
+    except Exception as e:
+        return f"Error searching manual: {str(e)}"
+
+
+def process_pdf_with_ocr(file_path: str) -> Document:
+    """Process a PDF using OCR if regular text extraction fails"""
+    try:
+        import pytesseract
+        from pdf2image import convert_from_path
+        from PIL import Image
+        import tempfile
+        import os
+
+        st.write(f"**Processing PDF with OCR**: {os.path.basename(file_path)}")
+
+        # First try regular Docling extraction
+        try:
+            converter = DocumentConverter()
+            result = converter.convert(file_path)
+
+            if hasattr(result.document, "text"):
+                text_content = result.document.text
+            elif hasattr(result.document, "get_text"):
+                text_content = result.document.get_text()
+            else:
+                text_content = str(result.document)
+
+            # Check if we got meaningful text (more than just image tags)
+            if len(text_content) > 500 and "<!-- image -->" not in text_content:
+                st.write("✅ **Regular text extraction successful**")
+                return Document(
+                    page_content=text_content,
+                    metadata={
+                        "source": file_path,
+                        "file_name": os.path.basename(file_path),
+                        "file_type": "pdf",
+                        "extraction_method": "docling",
+                    },
+                )
+        except Exception as e:
+            st.write(f"⚠️ **Regular extraction failed**: {str(e)}")
+
+        st.write("🔍 **Attempting OCR extraction...**")
+
+        # Convert PDF pages to images
+        with tempfile.TemporaryDirectory() as temp_dir:
+            try:
+                # Convert PDF to images
+                pages = convert_from_path(file_path, dpi=300)
+                st.write(f"📄 **Converted to {len(pages)} images**")
+
+                extracted_text = []
+
+                for i, page in enumerate(pages):
+                    st.write(f"🔍 **Processing page {i + 1}/{len(pages)}...**")
+
+                    # Save page as temporary image
+                    temp_image_path = os.path.join(temp_dir, f"page_{i + 1}.png")
+                    page.save(temp_image_path, "PNG")
+
+                    # Extract text using OCR
+                    try:
+                        page_text = pytesseract.image_to_string(page)
+                        if page_text.strip():
+                            extracted_text.append(f"\n--- Page {i + 1} ---\n")
+                            extracted_text.append(page_text.strip())
+                        else:
+                            st.write(f"⚠️ **No text found on page {i + 1}**")
+                    except Exception as e:
+                        st.write(f"❌ **OCR failed for page {i + 1}**: {str(e)}")
+                        continue
+
+                if extracted_text:
+                    full_text = "\n".join(extracted_text)
+                    st.write(
+                        f"✅ **OCR successful! Extracted {len(full_text)} characters**"
+                    )
+
+                    # Show preview
+                    st.write("**OCR Text Preview (first 500 characters):**")
+                    st.text_area("OCR Preview", full_text[:500], height=150)
+
+                    return Document(
+                        page_content=full_text,
+                        metadata={
+                            "source": file_path,
+                            "file_name": os.path.basename(file_path),
+                            "file_type": "pdf",
+                            "extraction_method": "ocr",
+                            "pages_processed": len(pages),
+                            "text_length": len(full_text),
+                        },
+                    )
+                else:
+                    st.error("❌ **No text could be extracted via OCR**")
+                    return None
+
+            except Exception as e:
+                st.error(f"❌ **PDF to image conversion failed**: {str(e)}")
+                return None
+
+    except ImportError:
+        st.error(
+            "❌ **OCR libraries not installed**. Please install: pip install pytesseract pillow pdf2image"
+        )
+        return None
+    except Exception as e:
+        st.error(f"❌ **OCR processing failed**: {str(e)}")
+        return None
+
+
 # Streamlit app configuration
 st.set_page_config(page_title="Chat with Website", page_icon="", layout="wide")
 st.title("CLAUDIA  🦙(LLAMA 3.3)")
@@ -1598,24 +1718,61 @@ with col1:
     )
 with col2:
     process_html_button = st.button(
-        "Process HTML Files", type="primary", use_container_width=True
+        "Process HTML", type="primary", use_container_width=True
     )
 with col3:
     process_docx_button = st.button(
-        "Process DOCX Files", type="primary", use_container_width=True
+        "Process DOCX", type="primary", use_container_width=True
     )
 with col4:
     process_pdf_button = st.button(
-        "Process PDF Files", type="primary", use_container_width=True
+        "Process PDF", type="primary", use_container_width=True
     )
 with col5:
     process_pptx_button = st.button(
-        "Process PowerPoint Files", type="primary", use_container_width=True
+        "Process PowerPoint", type="primary", use_container_width=True
     )
 with col6:
     process_xlsx_button = st.button(
-        "Process Excel Files", type="primary", use_container_width=True
+        "Process Excel", type="primary", use_container_width=True
     )
+
+# with col4:
+#     # Add this test button for OCR Programs Installed
+#     if st.button("🧪 Test Poppler", key="test_poppler"):
+#         try:
+#             import subprocess
+
+#             # Test if poppler is accessible
+#             result = subprocess.run(["pdftoppm", "-h"], capture_output=True, text=True)
+#             if result.returncode == 0:
+#                 st.success("✅ Poppler is installed and accessible!")
+#             else:
+#                 st.error("❌ Poppler not found in PATH")
+#         except FileNotFoundError:
+#             st.error("❌ Poppler not installed or not in PATH")
+#             st.write("**Install instructions:**")
+#             st.code("sudo apt install poppler-utils")
+#         except Exception as e:
+#             st.error(f"❌ Error testing Poppler: {e}")
+
+# with col4:
+#     if st.button("🧪 Test OCR", key="test_ocr_setup"):
+#         try:
+#             import pytesseract
+#             import pdf2image
+#             from PIL import Image
+
+#             st.success("✅ All OCR libraries are installed!")
+#             # Test Tesseract
+#             version = pytesseract.get_tesseract_version()
+#             st.write(f"📝 Tesseract version: {version}")
+#         except ImportError as e:
+#             st.error(f"❌ Missing library: {e}")
+#             st.write("Install with: `pip install pytesseract pillow pdf2image`")
+#         except Exception as e:
+#             st.error(f"❌ Tesseract not found: {e}")
+#             st.write("Install Tesseract: https://github.com/UB-Mannheim/tesseract/wiki")
 
 # Process sitemap
 if process_sitemap_button and sitemap_url:
@@ -1761,69 +1918,151 @@ if process_xlsx_button and xlsx_dir:
     except Exception as e:
         st.error(f"Error processing Excel files: {str(e)}")
 
-# Add this right after the Excel processing section
-if "vectorstore" in st.session_state:
-    st.divider()
-    st.subheader("🔧 Diagnostics")
 
-    col1, col2, col3 = st.columns(3)
+# # Add this as a completely separate section - put it after your other diagnostics
+# st.write("---")
+# st.subheader("🔍 OCR PDF Processing")
 
-    with col1:
-        if st.button("Diagnose Excel Processing"):
-            if xlsx_dir and os.path.exists(xlsx_dir):
-                files = glob.glob(os.path.join(xlsx_dir, "*.xlsx"))
-                if files:
-                    st.write(
-                        f"Found Excel files: {[os.path.basename(f) for f in files]}"
-                    )
-                    diagnose_excel_processing(files[0])
-                else:
-                    st.error(f"No .xlsx files found in {xlsx_dir}")
-            else:
-                st.error("Please enter a valid Excel directory path first")
+# # Simple file path input
+# ocr_pdf_path = st.text_input(
+#     "PDF file path for OCR:",
+#     value="/mnt/c/AI/CRMRecords/agreement-S.pdf",
+#     key="simple_ocr_path",
+# )
 
-    with col2:
-        if st.button("Diagnose Vector Store"):
-            diagnose_vectorstore_content()
+# # Simple process button
+# if st.button("Start OCR Processing", key="simple_ocr_start"):
+#     if ocr_pdf_path and os.path.exists(ocr_pdf_path):
+#         st.write(f"🔍 **Starting OCR on**: {os.path.basename(ocr_pdf_path)}")
 
-    with col3:
-        if st.button("Diagnose Name Extraction"):
-            names = improved_get_all_names_from_vectorstore_with_diagnostics(
-                st.session_state.vectorstore
-            )
-            if names:
-                st.write(f"**All {len(names)} unique names found:**")
-                # Display in columns for better readability
-                cols = st.columns(3)
-                for i, name in enumerate(names):
-                    with cols[i % 3]:
-                        st.write(f"{i + 1}. {name}")
-            else:
-                st.warning("No names found or error occurred")
-    with st.columns(4)[3]:  # Add a 4th column
-        if st.button("Test Improved Names"):
-            names = get_all_names_from_vectorstore_improved(
-                st.session_state.vectorstore
-            )
-            st.write(f"**Improved extraction found {len(names)} clean names:**")
-            if names:
-                # Display in columns for better readability
-                cols = st.columns(3)
-            for i, name in enumerate(names):
-                with cols[i % 3]:
-                    st.write(f"{i + 1}. {name}")
-        else:
-            st.warning("No names found")
+#         try:
+#             # Show that we're starting
+#             with st.status("Processing PDF with OCR...", expanded=True) as status:
+#                 st.write("📄 Converting PDF to images...")
 
-    # Add this as a new column/button
-    with st.columns(6)[5]:  # Or wherever you have space
-        if st.button("Compare Counting Methods"):
-            comp_count, imp_count, raw_count = compare_counting_methods(
-                st.session_state.vectorstore
-            )
-            st.write(
-                f"**Results**: Comprehensive: {comp_count}, Improved: {imp_count}, Raw: {raw_count}"
-            )
+#                 # Import here to check for errors
+#                 try:
+#                     import pytesseract
+#                     import pdf2image
+#                     from PIL import Image
+
+#                     st.write("✅ OCR libraries loaded")
+#                 except ImportError as e:
+#                     st.error(f"❌ Missing libraries: {e}")
+#                     st.stop()
+
+#                 # Simple OCR processing
+#                 st.write("🔄 Starting OCR extraction...")
+
+#                 # Convert PDF to images
+#                 pages = pdf2image.convert_from_path(ocr_pdf_path, dpi=200)
+#                 st.write(f"📄 Converted to {len(pages)} page images")
+
+#                 # Extract text from each page
+#                 all_text = []
+#                 for i, page in enumerate(pages):
+#                     st.write(f"🔍 Processing page {i + 1}/{len(pages)}")
+#                     try:
+#                         page_text = pytesseract.image_to_string(page)
+#                         if page_text.strip():
+#                             all_text.append(
+#                                 f"\n--- Page {i + 1} ---\n{page_text.strip()}"
+#                             )
+#                         else:
+#                             st.write(f"⚠️ No text on page {i + 1}")
+#                     except Exception as e:
+#                         st.write(f"❌ OCR failed on page {i + 1}: {e}")
+
+#                 if all_text:
+#                     combined_text = "\n".join(all_text)
+#                     st.write(
+#                         f"✅ **OCR Complete!** Extracted {len(combined_text)} characters"
+#                     )
+
+#                     # Store result
+#                     st.session_state["ocr_text"] = combined_text
+#                     st.session_state["ocr_file"] = ocr_pdf_path
+
+#                     status.update(label="✅ OCR Processing Complete!", state="complete")
+#                 else:
+#                     st.error("❌ No text could be extracted")
+
+#         except Exception as e:
+#             st.error(f"❌ **OCR Error**: {str(e)}")
+#             import traceback
+
+#             st.code(traceback.format_exc())
+#     else:
+#         st.error("❌ PDF file not found!")
+
+# # Show results if available
+# if "ocr_text" in st.session_state and st.session_state["ocr_text"]:
+#     st.write("---")
+#     st.write("## 📄 OCR Results")
+
+#     ocr_text = st.session_state["ocr_text"]
+#     ocr_file = st.session_state["ocr_file"]
+
+#     st.write(f"**File**: {os.path.basename(ocr_file)}")
+#     st.write(f"**Extracted**: {len(ocr_text)} characters")
+
+#     # Show preview
+#     st.text_area(
+#         "OCR Text Preview", ocr_text[:1000], height=200, key="ocr_result_preview"
+#     )
+
+#     # Add to vector store button
+#     if st.button("Add OCR Text to Vector Store", key="add_ocr_final"):
+#         try:
+#             # Create document
+#             doc = Document(
+#                 page_content=ocr_text,
+#                 metadata={
+#                     "source": ocr_file,
+#                     "file_name": os.path.basename(ocr_file),
+#                     "file_type": "pdf",
+#                     "extraction_method": "ocr",
+#                     "text_length": len(ocr_text),
+#                 },
+#             )
+
+#             # Create chunks
+#             text_splitter = CharacterTextSplitter(
+#                 separator="\n",
+#                 chunk_size=1000,
+#                 chunk_overlap=200,
+#             )
+#             chunks = text_splitter.split_documents([doc])
+
+#             # Add to vector store
+#             if "vectorstore" in st.session_state:
+#                 st.session_state.vectorstore.add_documents(chunks)
+#                 save_vectorstore(st.session_state.vectorstore)
+#                 save_local_documents([doc], [ocr_file], "pdf")
+
+#                 st.success(
+#                     f"✅ **Success!** Added {len(chunks)} chunks to vector store"
+#                 )
+
+#                 st.success(f"✅ **Added {len(chunks)} chunks to vector store!**")
+
+#                 # Clear results without immediate rerun
+#                 del st.session_state["ocr_text"]
+#                 del st.session_state["ocr_file"]
+
+#                 # Show instruction instead of auto-rerun
+#                 st.info("🔄 **Refresh the page to clear this section**")
+#             else:
+#                 st.error("❌ No vector store found!")
+
+#         except Exception as e:
+#             st.error(f"❌ Error adding to vector store: {str(e)}")
+
+#     # Clear results button
+#     if st.button("Clear OCR Results", key="clear_ocr_simple"):
+#         del st.session_state["ocr_text"]
+#         del st.session_state["ocr_file"]
+#         st.rerun()
 
 
 # Show loaded documents/URLs in sidebar
@@ -1926,6 +2165,7 @@ with st.sidebar:
                 st.rerun()
     else:
         st.info("No content processed yet. Enter paths or URLs above to begin.")
+
 
 # Add this after the sidebar section and before the chat interface
 if "vectorstore" in st.session_state:
@@ -2050,6 +2290,9 @@ if "vectorstore" in st.session_state and "conversation_chain" not in st.session_
         k=50,  # Retrieve top 50 chunks
     )
 
+###################### Chat Handler (Begin) ####################
+
+
 # Chat interface
 if "vectorstore" in st.session_state:
     st.divider()
@@ -2076,7 +2319,7 @@ if user_input and user_input.strip():
         with st.spinner("Thinking..."):
             user_query_lower = user_input.lower()
 
-            # Enhanced query routing based on question type
+            # VERY SPECIFIC routing for name-related queries only
             if any(
                 keyword in user_query_lower
                 for keyword in [
@@ -2111,44 +2354,8 @@ if user_input and user_input.strip():
                 assistant_response = f"There are {len(names)} names in the database."
                 st.markdown(assistant_response)
 
-            elif any(
-                word
-                for word in user_input.split()
-                if len(word.strip(".,!?")) > 2
-                and word.strip(".,!?").replace("'", "").isalpha()
-                and word.strip(".,!?").lower()
-                not in [
-                    "give",
-                    "me",
-                    "all",
-                    "the",
-                    "information",
-                    "you",
-                    "have",
-                    "on",
-                    "about",
-                    "show",
-                    "tell",
-                    "what",
-                    "is",
-                    "does",
-                    "and",
-                    "or",
-                    "but",
-                    "for",
-                    "with",
-                    "from",
-                    "to",
-                ]
-            ):
-                # Handle specific person lookup queries
-                assistant_response = handle_specific_person_query(
-                    user_input, st.session_state.vectorstore
-                )
-                st.markdown(assistant_response)
-
             else:
-                # First try comprehensive query for general questions
+                # Use the original simple approach for everything else
                 comprehensive_response = handle_comprehensive_query(
                     user_input, st.session_state.vectorstore
                 )
@@ -2157,7 +2364,7 @@ if user_input and user_input.strip():
                     assistant_response = comprehensive_response
                     st.markdown(assistant_response)
                 else:
-                    # Use the regular conversational chain for other questions
+                    # Use regular chain
                     response = st.session_state.conversation_chain(
                         {"question": user_input}
                     )
@@ -2170,8 +2377,8 @@ if user_input and user_input.strip():
                             for i, doc in enumerate(response["source_documents"]):
                                 st.write(f"**Source {i + 1}:**")
                                 st.write(
-                                    doc.page_content[:500] + "..."
-                                    if len(doc.page_content) > 500
+                                    doc.page_content[:300] + "..."
+                                    if len(doc.page_content) > 300
                                     else doc.page_content
                                 )
 
@@ -2182,5 +2389,5 @@ if user_input and user_input.strip():
 
             # Save chat history to database
             save_chat_history(st.session_state.chat_history)
-else:
-    st.info("Please process content from any of the sources above to start chatting")
+
+##################################### Chat Handler (End)
