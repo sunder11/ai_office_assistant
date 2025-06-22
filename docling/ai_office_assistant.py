@@ -738,69 +738,6 @@ def process_pdf_with_ocr_internal(file_path: str) -> Document:
         st.error(f"❌ **OCR processing failed**: {str(e)}")
         return None
 
-
-def process_pdf_with_ocr_internal(file_path: str) -> Document:
-    """Internal OCR processing function (extracted from your existing code)"""
-    try:
-        import pytesseract
-        from pdf2image import convert_from_path
-        from PIL import Image
-        import tempfile
-        import os
-
-        st.write("🔍 **Starting OCR extraction...**")
-
-        # Convert PDF pages to images
-        with tempfile.TemporaryDirectory() as temp_dir:
-            try:
-                # Convert PDF to images
-                pages = convert_from_path(file_path, dpi=300)
-                st.write(f"📄 **Converted to {len(pages)} images**")
-
-                extracted_text = []
-                for i, page in enumerate(pages):
-                    st.write(f"🔍 **Processing page {i + 1}/{len(pages)}...**")
-                    # Save page as temporary image
-                    temp_image_path = os.path.join(temp_dir, f"page_{i + 1}.png")
-                    page.save(temp_image_path, "PNG")
-
-                    # Extract text using OCR
-                    try:
-                        page_text = pytesseract.image_to_string(page)
-                        if page_text.strip():
-                            extracted_text.append(f"\n--- Page {i + 1} ---\n")
-                            extracted_text.append(page_text.strip())
-                        else:
-                            st.write(f"⚠️ **No text found on page {i + 1}**")
-                    except Exception as e:
-                        st.write(f"❌ **OCR failed for page {i + 1}**: {str(e)}")
-                        continue
-
-                if extracted_text:
-                    full_text = "\n".join(extracted_text)
-                    st.write(
-                        f"✅ **OCR successful! Extracted {len(full_text)} characters**"
-                    )
-
-                    return Document(
-                        page_content=full_text,
-                        metadata={
-                            "source": file_path,
-                            "file_name": os.path.basename(file_path),
-                            "file_type": "pdf",
-                            "extraction_method": "ocr",
-                            "pages_processed": len(pages),
-                            "text_length": len(full_text),
-                        },
-                    )
-                else:
-                    st.error("❌ **No text could be extracted via OCR**")
-                    return None
-
-            except Exception as e:
-                st.error(f"❌ **PDF to image conversion failed**: {str(e)}")
-                return None
-
     except ImportError:
         st.error(
             "❌ **OCR libraries not installed**. Please install: pip install pytesseract pillow pdf2image"
@@ -1107,111 +1044,74 @@ def create_chain_with_custom_retriever(vectorstore, k=20):
     return chain
 
 
-def handle_comprehensive_query(query: str, vectorstore) -> str:
-    """Handle comprehensive queries with ALL CRM data for person searches"""
-    # Keywords that indicate a comprehensive query
-    comprehensive_keywords = [
-        "list all",
-        "all names",
-        "all people",
-        "everyone",
-        "complete list",
-        "full list",
-        "entire",
-        "total",
-        "every",
-        "tell me about",
-        "phone number",
-        "email",
-        "contact",
-    ]
+def handle_improved_query_routing(query: str, vectorstore) -> str:
+    """Improved query routing with clearer logic"""
+    try:
+        query_lower = query.lower()
 
-    is_comprehensive = any(
-        keyword in query.lower() for keyword in comprehensive_keywords
-    )
-
-    if is_comprehensive:
-        all_docs = []
-
-        # Check if this is a person/CRM query
-        is_person_query = any(
-            word in query.lower()
-            for word in [
-                "robert",
-                "jason",
-                "christina",
-                "nicolas",
-                "phone",
-                "email",
-                "contact",
-                "tell me about",
+        # 1. EXACT name listing queries (very specific)
+        if any(
+            phrase in query_lower
+            for phrase in [
+                "list all names",
+                "show all names",
+                "all names in database",
+                "list the names",
+                "what names are in",
             ]
-        )
-
-        if is_person_query:
-            # For person queries, get ALL CRM chunks + some others
-            if hasattr(vectorstore, "docstore") and hasattr(
-                vectorstore, "index_to_docstore_id"
-            ):
-                # Get ALL CRM chunks
-                for i in range(len(vectorstore.index_to_docstore_id)):
-                    doc_id = vectorstore.index_to_docstore_id.get(i)
-                    if doc_id and doc_id in vectorstore.docstore._dict:
-                        doc = vectorstore.docstore._dict[doc_id]
-                        if doc.metadata.get("file_type") == "xlsx":
-                            all_docs.append(doc)
-
-                # Also get some relevant non-CRM docs
-                similarity_retriever = vectorstore.as_retriever(
-                    search_type="similarity", search_kwargs={"k": 10}
+        ):
+            names = get_all_names_from_vectorstore_improved(vectorstore)
+            if names:
+                return (
+                    f"Here are all {len(names)} names in the database:\n\n"
+                    + "\n".join([f"{i}. {name}" for i, name in enumerate(names, 1)])
                 )
-                other_docs = similarity_retriever.get_relevant_documents(query)
-                for doc in other_docs:
-                    if doc.metadata.get("file_type") != "xlsx":
-                        all_docs.append(doc)
+            else:
+                return "I couldn't find any names in the database."
+
+        # 2. Name count queries
+        elif any(
+            phrase in query_lower
+            for phrase in ["how many names", "count names", "number of names"]
+        ):
+            names = get_all_names_from_vectorstore_improved(vectorstore)
+            return f"There are {len(names)} names in the database."
+
+        # 3. Document queries (agreements, summaries, etc.) - HIGH PRIORITY
+        elif any(
+            phrase in query_lower
+            for phrase in [
+                "summarize",
+                "summary of",
+                "agreement",
+                "contract",
+                "document",
+            ]
+        ):
+            st.write("**Debug: Routing to document handler**")
+            return handle_document_query(query, vectorstore)
+
+        # 4. Person-specific queries (only with clear name patterns)
+        elif any(
+            phrase in query_lower
+            for phrase in ["phone number", "email", "contact info"]
+        ) and any(
+            word[0].isupper() for word in query.split() if len(word) > 2
+        ):  # Has capitalized words (names)
+            st.write("**Debug: Routing to person handler**")
+            return handle_specific_person_query(query, vectorstore)
+
+        # 5. Everything else - use regular conversation chain
         else:
-            # For non-person queries, use regular retrieval
-            similarity_retriever = vectorstore.as_retriever(
-                search_type="similarity", search_kwargs={"k": 40}
-            )
-            all_docs = similarity_retriever.get_relevant_documents(query)
+            st.write("**Debug: Using regular conversation chain**")
+            if "conversation_chain" in st.session_state:
+                response = st.session_state.conversation_chain({"question": query})
+                return response["answer"]
+            else:
+                return "I don't have enough context to answer that question."
 
-        # Combine all content
-        combined_content = "\n".join([doc.page_content for doc in all_docs])
-
-        # Create a specialized prompt
-        llm = ChatGroq(
-            model="llama-3.3-70b-versatile",
-            temperature=0,
-            max_tokens=4096,
-        )
-
-        prompt = f"""
-        Question: {query}
-        
-        Complete Database Content:
-        {combined_content[:25000]}
-        
-        Answer the question based ONLY on the database content above. 
-        For CRM records, look for: "FIRST_NAME: [name] | LAST_NAME: [name] | ... | PHONE1: [number]"
-        
-        Instructions:
-        - Search through ALL the provided content carefully
-        - For person queries, look through all the CRM records to find the exact person
-        - For "list all" queries, extract ALL matching items from the content
-        - Do not use any external knowledge - only use the information provided above
-        - If you cannot find the information, say so clearly
-        
-        Answer:
-        """
-
-        try:
-            response = llm.invoke(prompt)
-            return response.content
-        except Exception as e:
-            return f"Error processing comprehensive query: {str(e)}"
-
-    return None  # Not a comprehensive query
+    except Exception as e:
+        return f"I encountered an error while processing your question: {str(e)}"
 
 
 def initialize_storage():
@@ -1253,117 +1153,13 @@ def on_shutdown():
     close_db_connection()
 
 
-def debug_retrieval(query: str, vectorstore):
-    """Debug what chunks are being retrieved for a query"""
-    st.write("## 🔍 Retrieval Debug")
-
-    # Test the same retrieval as intelligent_rag_query
-    retriever = vectorstore.as_retriever(
-        search_type="mmr", search_kwargs={"k": 40, "fetch_k": 80, "lambda_mult": 0.3}
-    )
-
-    docs = retriever.get_relevant_documents(query)
-
-    st.write(f"**Query**: {query}")
-    st.write(f"**Retrieved {len(docs)} chunks:**")
-
-    # Analyze what types of chunks we got
-    chunk_types = {}
-    for doc in docs:
-        source = doc.metadata.get("source", "unknown")
-        file_type = doc.metadata.get("file_type", "unknown")
-
-        if "xlsx" in source.lower():
-            chunk_type = "CRM"
-        elif (
-            "agreement" in source.lower()
-            or doc.metadata.get("extraction_method") == "pymupdf_ocr"
-        ):
-            chunk_type = "Legal"
-        elif "manual" in source.lower():
-            chunk_type = "Manual"
-        else:
-            chunk_type = "Other"
-
-        if chunk_type not in chunk_types:
-            chunk_types[chunk_type] = 0
-        chunk_types[chunk_type] += 1
-
-    st.write("**Chunk breakdown:**")
-    for chunk_type, count in chunk_types.items():
-        st.write(f"- {chunk_type}: {count} chunks")
-
-    # Show first few chunks
-    st.write("**First 5 chunks:**")
-    for i, doc in enumerate(docs[:5]):
-        st.write(f"**Chunk {i + 1}:**")
-        st.write(f"- Source: {doc.metadata.get('source', 'unknown')}")
-        st.write(f"- Type: {doc.metadata.get('file_type', 'unknown')}")
-        st.write(f"- Content preview: {doc.page_content[:100]}...")
-        st.write("---")
-
-
-def debug_crm_chunks(query: str, vectorstore):
-    """Debug specifically what CRM records are being retrieved"""
-    st.write("## 🔍 CRM Records Debug")
-
-    retriever = vectorstore.as_retriever(
-        search_type="mmr", search_kwargs={"k": 40, "fetch_k": 80, "lambda_mult": 0.3}
-    )
-
-    docs = retriever.get_relevant_documents(query)
-
-    # Extract just the CRM chunks
-    crm_chunks = [doc for doc in docs if doc.metadata.get("file_type") == "xlsx"]
-
-    st.write(f"**Found {len(crm_chunks)} CRM chunks for query: '{query}'**")
-
-    # Parse and show names from CRM chunks
-    names_found = []
-    for i, doc in enumerate(crm_chunks):
-        content = doc.page_content
-
-        # Extract names from this chunk
-        import re
-
-        name_matches = re.findall(
-            r"FIRST_NAME:\s*([^|]+?)\s*\|\s*LAST_NAME:\s*([^|]+?)\s*\|", content
-        )
-
-        chunk_names = []
-        for first, last in name_matches:
-            full_name = f"{first.strip()} {last.strip()}"
-            chunk_names.append(full_name)
-            names_found.append(full_name)
-
-        if i < 5:  # Show first 5 chunks
-            st.write(f"**CRM Chunk {i + 1}** - Names: {chunk_names}")
-            st.text_area(
-                f"Content {i + 1}", content[:500], height=100, key=f"crm_debug_{i}"
-            )
-
-    # Check if Robert Earl specifically is in the retrieved names
-    st.write("---")
-    st.write(f"**All names found in retrieved CRM chunks:**")
-    unique_names = sorted(set(names_found))
-    for name in unique_names[:20]:  # Show first 20
-        if "robert" in name.lower() and "earl" in name.lower():
-            st.write(f"🎯 **{name}** ← TARGET FOUND!")
-        elif "robert" in name.lower():
-            st.write(f"👤 {name}")
-        else:
-            st.write(f"   {name}")
-
-    if len(unique_names) > 20:
-        st.write(f"... and {len(unique_names) - 20} more names")
-
-
-############################################### END DEBUG  ############
-
 # Register shutdown handler
 import atexit
 
 atexit.register(on_shutdown)
+
+
+##################### QUERY CONFIGURATION (begin) #################
 
 
 def handle_specific_person_query(query: str, vectorstore) -> str:
@@ -1556,6 +1352,136 @@ def handle_specific_person_query(query: str, vectorstore) -> str:
         return f"Error: {str(e)}"
 
 
+def handle_intelligent_query(query: str, vectorstore) -> str:
+    """Intelligent query handler that routes to appropriate processing method"""
+    try:
+        query_lower = query.lower()
+
+        # 1. VERY SPECIFIC name listing queries only
+        if any(
+            phrase in query_lower
+            for phrase in [
+                "list all names",
+                "show all names",
+                "all names in",
+                "list the names",
+                "what names are",
+            ]
+        ):
+            names = get_all_names_from_vectorstore_improved(vectorstore)
+            if names:
+                return (
+                    f"Here are all {len(names)} names in the database:\n\n"
+                    + "\n".join([f"{i}. {name}" for i, name in enumerate(names, 1)])
+                )
+            else:
+                return "I couldn't find any names in the database."
+
+        # 2. Name count queries
+        elif any(
+            phrase in query_lower
+            for phrase in ["how many names", "count names", "number of names"]
+        ):
+            names = get_all_names_from_vectorstore_improved(vectorstore)
+            return f"There are {len(names)} names in the database."
+
+        # 3. Specific person queries (phone, email, contact info)
+        elif any(
+            phrase in query_lower
+            for phrase in ["phone number", "email", "contact", " tell me about "]
+        ) and any(
+            word.istitle() for word in query.split()
+        ):  # Contains capitalized names
+            return handle_specific_person_query(query, vectorstore)
+
+        # 4. Document-specific queries (summarize, agreement, etc.)
+        elif any(
+            phrase in query_lower
+            for phrase in ["summarize", "agreement", "contract", "document", "pdf"]
+        ):
+            return handle_document_query(query, vectorstore)
+
+        # 5. Everything else - use regular conversation chain
+        else:
+            if "conversation_chain" in st.session_state:
+                response = st.session_state.conversation_chain({"question": query})
+                return response["answer"]
+            else:
+                return "I don't have enough context to answer that question."
+
+    except Exception as e:
+        return f"I encountered an error while processing your question: {str(e)}"
+
+
+def handle_document_query(query: str, vectorstore) -> str:
+    """Handle document-specific queries like summarization"""
+    try:
+        # Use a focused retrieval strategy for document queries
+        retriever = vectorstore.as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": 15},  # Get top 15 most relevant chunks
+        )
+
+        # Get relevant documents
+        relevant_docs = retriever.get_relevant_documents(query)
+
+        if not relevant_docs:
+            return "I couldn't find any relevant documents for your query."
+
+        # Show debug info
+        st.write(f"**Debug: Found {len(relevant_docs)} relevant chunks**")
+
+        # Group documents by source
+        docs_by_source = {}
+        for doc in relevant_docs:
+            source = doc.metadata.get("source", "unknown")
+            file_name = doc.metadata.get("file_name", os.path.basename(source))
+
+            if file_name not in docs_by_source:
+                docs_by_source[file_name] = []
+            docs_by_source[file_name].append(doc)
+
+        st.write(f"**Debug: Documents involved: {list(docs_by_source.keys())}**")
+
+        # Combine content from relevant documents
+        combined_content = []
+        for file_name, docs in docs_by_source.items():
+            combined_content.append(f"\n=== FROM DOCUMENT: {file_name} ===")
+            for doc in docs:
+                combined_content.append(doc.page_content[:1000])  # Limit chunk size
+
+        content_text = "\n".join(combined_content)
+
+        # Create focused prompt
+        llm = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            temperature=0,
+            max_tokens=4096,
+        )
+
+        prompt = f"""
+Based on the following document content, please answer this question: {query}
+
+Document Content:
+{content_text[:20000]}  # Limit total content to avoid token limits
+
+Instructions:
+- Answer based ONLY on the provided document content
+- If you're asked to summarize a specific agreement, look for that document in the content above
+- Be specific about which document you're referencing
+- If you can't find the specific document mentioned, say so clearly
+- Provide detailed information from the relevant document(s)
+
+Answer:
+"""
+
+        response = llm.invoke(prompt)
+        return response.content
+
+    except Exception as e:
+        return f"Error processing document query: {str(e)}"
+
+
 def search_manual_content(query: str, vectorstore) -> str:
     """Search specifically in manual content"""
     try:
@@ -1603,6 +1529,8 @@ def search_manual_content(query: str, vectorstore) -> str:
 
     except Exception as e:
         return f"Error searching manual: {str(e)}"
+
+    ###################### Query CONFIGURATION (end) #########################
 
 
 def process_pdf_with_ocr(file_path: str) -> Document:
@@ -2407,19 +2335,16 @@ if "vectorstore" in st.session_state and "conversation_chain" not in st.session_
     )
 
 ###################### Chat Handler (Begin) ####################
-
-
 # Chat interface
 if "vectorstore" in st.session_state:
     st.divider()
     st.subheader("Ask Claudia - Your AI Assistant")
-
     # Display chat history
     for message in st.session_state.chat_history:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # Chat input
+# Chat input
 user_input = st.chat_input("Ask about the website content...")
 
 if user_input and user_input.strip():
@@ -2433,77 +2358,17 @@ if user_input and user_input.strip():
     with st.chat_message("assistant"):
         st.write("Claudia")
         with st.spinner("Thinking..."):
-            user_query_lower = user_input.lower()
-
-            # VERY SPECIFIC routing for name-related queries only
-            if any(
-                keyword in user_query_lower
-                for keyword in [
-                    "list all names",
-                    "list the names",
-                    "all names",
-                    "show all names",
-                ]
-            ):
-                # Handle "list all names" requests
-                names = get_all_names_from_vectorstore_improved(
-                    st.session_state.vectorstore
-                )
-                if names:
-                    assistant_response = (
-                        f"Here are all {len(names)} names in the database:\n\n"
-                    )
-                    for i, name in enumerate(names, 1):
-                        assistant_response += f"{i}. {name}\n"
-                else:
-                    assistant_response = "I couldn't find any names in the database."
-                st.markdown(assistant_response)
-
-            elif any(
-                keyword in user_query_lower
-                for keyword in ["how many names", "count names", "number of names"]
-            ):
-                # Handle "how many names" requests
-                names = get_all_names_from_vectorstore_improved(
-                    st.session_state.vectorstore
-                )
-                assistant_response = f"There are {len(names)} names in the database."
-                st.markdown(assistant_response)
-
-            else:
-                # Use the original simple approach for everything else
-                comprehensive_response = handle_comprehensive_query(
-                    user_input, st.session_state.vectorstore
-                )
-
-                if comprehensive_response:
-                    assistant_response = comprehensive_response
-                    st.markdown(assistant_response)
-                else:
-                    # Use regular chain
-                    response = st.session_state.conversation_chain(
-                        {"question": user_input}
-                    )
-                    assistant_response = response["answer"]
-                    st.markdown(assistant_response)
-
-                    # Show source documents for debugging
-                    if "source_documents" in response:
-                        with st.expander("Source Documents Used", expanded=False):
-                            for i, doc in enumerate(response["source_documents"]):
-                                st.write(f"**Source {i + 1}:**")
-                                st.write(
-                                    doc.page_content[:300] + "..."
-                                    if len(doc.page_content) > 300
-                                    else doc.page_content
-                                )
-
-            # Add assistant response to chat history
-            st.session_state.chat_history.append(
-                {"role": "assistant", "content": assistant_response}
+            assistant_response = handle_improved_query_routing(
+                user_input, st.session_state.vectorstore
             )
+            st.markdown(assistant_response)
 
-            # Save chat history to database
-            save_chat_history(st.session_state.chat_history)
+    # Add assistant response to chat history
+    st.session_state.chat_history.append(
+        {"role": "assistant", "content": assistant_response}
+    )
+    # Save chat history to database
+    save_chat_history(st.session_state.chat_history)
+
 
 ##################################### Chat Handler (End)
