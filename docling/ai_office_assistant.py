@@ -1090,6 +1090,65 @@ atexit.register(on_shutdown)
 
 ##################### QUERY CONFIGURATION (begin) #################
 
+def handle_name_listing_query(query: str, vectorstore) -> str:
+    """Handle queries asking for lists of people with specific names"""
+    try:
+        # Extract the target name from the query
+        query_lower = query.lower()
+        words = query.split()
+        
+        # Find the name they're asking about
+        target_name = None
+        name_triggers = ["named", "name", "first", "last"]
+        
+        for i, word in enumerate(words):
+            if word.lower() in name_triggers and i + 1 < len(words):
+                # Get the next word as the target name
+                target_name = words[i + 1].replace(',', '').replace('.', '').capitalize()
+                break
+        
+        if not target_name:
+            return "I couldn't identify which name you're looking for. Please try 'list people named Robert' or 'people with first name John'."
+        
+        st.write(f"**Debug: Looking for people named '{target_name}'**")
+        
+        # Get all names from database
+        all_names = get_all_names_from_vectorstore_improved(vectorstore)
+        
+        # Find matches
+        matching_names = []
+        for db_name in all_names:
+            name_parts = db_name.split()
+            
+            # Check first name match
+            if name_parts[0].lower() == target_name.lower():
+                matching_names.append(db_name)
+            # Check last name match
+            elif len(name_parts) > 1 and any(part.lower() == target_name.lower() for part in name_parts[1:]):
+                matching_names.append(db_name)
+        
+        if matching_names:
+            result = f"Found {len(matching_names)} people with the name '{target_name}':\n\n"
+            for i, name in enumerate(matching_names, 1):
+                result += f"{i}. {name}\n"
+            return result
+        else:
+            # Look for similar names
+            similar_names = []
+            for db_name in all_names:
+                if target_name.lower() in db_name.lower():
+                    similar_names.append(db_name)
+            
+            if similar_names:
+                result = f"No exact matches for '{target_name}', but found similar names:\n\n"
+                for i, name in enumerate(similar_names[:20], 1):  # Show up to 20
+                    result += f"{i}. {name}\n"
+                return result
+            else:
+                return f"No people found with the name '{target_name}'."
+                
+    except Exception as e:
+        return f"Error processing name listing query: {str(e)}"
 
 def handle_improved_query_routing(query: str, vectorstore) -> str:
     """Improved query routing with clearer logic"""
@@ -1124,7 +1183,24 @@ def handle_improved_query_routing(query: str, vectorstore) -> str:
             names = get_all_names_from_vectorstore_improved(vectorstore)
             return f"There are {len(names)} names in the database."
 
-        # 3. Document queries (agreements, summaries, etc.) - HIGH PRIORITY
+        # 2.5. NEW: List people with specific first/last name
+        elif any(
+            phrase in query_lower
+            for phrase in [
+                "list all people named",
+                "list people named",
+                "show people named",
+                "all people named",
+                "people with the first name",
+                "people with the last name",
+                "list all the people named",
+                "show all people named",
+            ]
+        ):
+            st.write("**Debug: Routing to name listing handler**")
+            return handle_name_listing_query(query, vectorstore)
+
+        # 3. Document queries (agreements, summaries, etc.)
         elif any(
             phrase in query_lower
             for phrase in [
@@ -1138,15 +1214,82 @@ def handle_improved_query_routing(query: str, vectorstore) -> str:
             st.write("**Debug: Routing to document handler**")
             return handle_document_query(query, vectorstore)
 
-        # 4. Person-specific queries (only with clear name patterns)
+        # 4. Person-specific queries
         elif any(
             phrase in query_lower
-            for phrase in ["phone number", "email", "contact info"]
-        ) and any(
-            word[0].isupper() for word in query.split() if len(word) > 2
-        ):  # Has capitalized words (names)
-            st.write("**Debug: Routing to person handler**")
-            return handle_specific_person_query(query, vectorstore)
+            for phrase in [
+                "phone number",
+                "email",
+                "contact info",
+                "contact",
+                "phone",
+                "email address",
+                "tell me about",
+                "information on",
+                "details on",
+                "about",
+                "what is",
+                "who is",
+                "what do you know about",
+            ]
+        ):
+            words = query.lower().split()
+            skip_words = {
+                "what",
+                "is",
+                "the",
+                "phone",
+                "number",
+                "email",
+                "address",
+                "contact",
+                "info",
+                "information",
+                "about",
+                "tell",
+                "me",
+                "give",
+                "show",
+                "find",
+                "get",
+                "his",
+                "her",
+                "their",
+                "of",
+                "for",
+                "on",
+                "in",
+                "at",
+                "to",
+                "from",
+                "with",
+                "and",
+                "how",
+                "can",
+                "you",
+                "please",
+                "people",
+                "named",
+                "do",
+                "know",
+            }
+
+            potential_names = [
+                word
+                for word in words
+                if word.isalpha() and len(word) > 2 and word not in skip_words
+            ]
+
+            if potential_names:
+                st.write("**Debug: Routing to person handler**")
+                return handle_specific_person_query(query, vectorstore)
+            else:
+                st.write("**Debug: No names detected, using regular chain**")
+                if "conversation_chain" in st.session_state:
+                    response = st.session_state.conversation_chain({"question": query})
+                    return response["answer"]
+                else:
+                    return "I don't have enough context to answer that question."
 
         # 5. Everything else - use regular conversation chain
         else:
@@ -1162,121 +1305,171 @@ def handle_improved_query_routing(query: str, vectorstore) -> str:
 
 
 def handle_specific_person_query(query: str, vectorstore) -> str:
-    """Handle queries about specific people - GUARANTEED WORKING VERSION"""
+    """Handle queries about specific people - FIXED FOR CASE INSENSITIVITY"""
     try:
-        # Extract the name from the query first
         import re
 
-        # Simple name extraction
+        # STEP 1: Extract potential names (case insensitive)
         words = query.split()
         potential_names = []
 
-        # Look for pairs of capitalized words
-        for i in range(len(words) - 1):
-            if (
-                words[i].replace(",", "").replace(".", "").isalpha()
-                and words[i + 1].replace(",", "").replace(".", "").isalpha()
-                and len(words[i]) > 1
-                and len(words[i + 1]) > 1
-            ):
-                first = words[i].capitalize()
-                last = words[i + 1].capitalize()
+        # Skip obvious non-name words
+        skip_words = {
+            "what",
+            "is",
+            "the",
+            "phone",
+            "number",
+            "email",
+            "address",
+            "contact",
+            "info",
+            "information",
+            "about",
+            "tell",
+            "me",
+            "give",
+            "show",
+            "find",
+            "get",
+            "his",
+            "her",
+            "their",
+            "of",
+            "for",
+            "on",
+            "in",
+            "at",
+            "to",
+            "from",
+            "with",
+            "and",
+            "how",
+            "can",
+            "you",
+            "please",
+        }
 
-                # Skip obvious non-names
-                if first.lower() not in [
-                    "give",
-                    "show",
-                    "tell",
-                    "what",
-                    "have",
-                    "all",
-                    "the",
-                    "information",
-                ] and last.lower() not in [
-                    "give",
-                    "show",
-                    "tell",
-                    "what",
-                    "have",
-                    "all",
-                    "the",
-                    "information",
-                ]:
-                    potential_names.append(f"{first} {last}")
+        # FIXED: Look for potential names regardless of case
+        i = 0
+        while i < len(words):
+            word = (
+                words[i]
+                .replace(",", "")
+                .replace(".", "")
+                .replace("?", "")
+                .replace("'s", "")
+            )
 
-        # Also try single words that might be names
-        for word in words:
-            clean_word = word.replace(",", "").replace(".", "").capitalize()
+            # Check if this could be a name (alphabetic, not a skip word, reasonable length)
             if (
-                len(clean_word) > 2
-                and clean_word.isalpha()
-                and clean_word.lower()
-                not in [
-                    "give",
-                    "show",
-                    "tell",
-                    "what",
-                    "have",
-                    "all",
-                    "the",
-                    "information",
-                    "you",
-                    "me",
-                    "on",
-                    "about",
-                ]
+                word
+                and len(word) > 1
+                and word.isalpha()
+                and word.lower() not in skip_words
             ):
-                potential_names.append(clean_word)
+                # Try to build a full name by looking ahead
+                name_parts = [word.capitalize()]  # Capitalize for consistency
+                j = i + 1
+
+                # Keep adding consecutive potential name words
+                while j < len(words) and j < i + 3:  # Limit to 3 parts max
+                    next_word = (
+                        words[j]
+                        .replace(",", "")
+                        .replace(".", "")
+                        .replace("?", "")
+                        .replace("'s", "")
+                    )
+                    if (
+                        next_word
+                        and len(next_word) > 1
+                        and next_word.isalpha()
+                        and next_word.lower() not in skip_words
+                    ):
+                        name_parts.append(next_word.capitalize())
+                        j += 1
+                    else:
+                        break
+
+                # Add the name(s) we found
+                if len(name_parts) >= 2:
+                    # Add full name
+                    potential_names.append(" ".join(name_parts))
+                    # Also add individual parts for partial matching
+                    for part in name_parts:
+                        potential_names.append(part)
+                    i = j  # Skip ahead
+                elif len(name_parts) == 1:
+                    potential_names.append(name_parts[0])
+                    i += 1
+                else:
+                    i += 1
+            else:
+                i += 1
+
+        # Remove duplicates and prioritize longer names (more specific)
+        potential_names = list(set(potential_names))
+        potential_names = sorted(
+            potential_names, key=lambda x: (len(x.split()), len(x)), reverse=True
+        )
 
         st.write(f"**Debug: Looking for these names: {potential_names}**")
 
         if not potential_names:
             return "I couldn't identify any names in your query. Please try asking like 'What is John Smith's phone number?'"
 
-        # Get ALL the names from the database using our working function
+        # Get ALL the names from the database
         all_names = get_all_names_from_vectorstore_improved(vectorstore)
-
         st.write(f"**Debug: Total names in database: {len(all_names)}**")
 
-        # Find exact matches (case insensitive)
+        # Find matches with priority for exact full name matches
         matched_names = []
+
         for search_name in potential_names:
             st.write(f"**Debug: Searching for '{search_name}'**")
 
-        for db_name in all_names:
-            # Exact match
-            if search_name.lower() == db_name.lower():
-                matched_names.append(db_name)
-                st.write(f"**Debug: EXACT MATCH FOUND: {db_name}**")
-            # First name match
-            elif search_name.lower() == db_name.split()[0].lower():
-                matched_names.append(db_name)
-                st.write(f"**Debug: FIRST NAME MATCH: {db_name}**")
-            # Last name match (check if search_name matches any part after first name)
-            elif len(db_name.split()) > 1 and search_name.lower() in [
-                part.lower() for part in db_name.split()[1:]
-            ]:
-                matched_names.append(db_name)
-                st.write(f"**Debug: LAST NAME MATCH: {db_name}**")
-            # Partial match (search_name is part of db_name)
-            elif search_name.lower() in db_name.lower():
-                matched_names.append(db_name)
-                st.write(f"**Debug: PARTIAL MATCH FOUND: {db_name}**")
+            # First, try exact matches (case insensitive)
+            for db_name in all_names:
+                if search_name.lower() == db_name.lower():
+                    matched_names.append(db_name)
+                    st.write(f"**Debug: EXACT MATCH FOUND: {db_name}**")
+                    # If we found an exact match for a full name, we can stop here
+                    if len(search_name.split()) > 1:
+                        break
+
+            # If we found a full name exact match, don't look for partial matches
+            if matched_names and len(search_name.split()) > 1:
+                break
+
         # Remove duplicates
         matched_names = list(set(matched_names))
 
         if not matched_names:
-            # Show similar names for debugging
+            # Try partial matching as fallback
+            for search_name in potential_names:
+                search_parts = search_name.lower().split()
+                for db_name in all_names:
+                    db_parts = db_name.lower().split()
+                    if all(part in db_parts for part in search_parts):
+                        matched_names.append(db_name)
+                        st.write(f"**Debug: PARTIAL MATCH: {db_name}**")
+
+        if not matched_names:
             similar_names = [
                 name
                 for name in all_names
                 if any(part.lower() in name.lower() for part in potential_names)
             ]
-            return f"I couldn't find exact matches for: {potential_names}. Similar names in database: {similar_names[:10]}"
+            return f"I couldn't find matches for: {potential_names}. Similar names: {similar_names[:10]}"
 
-        st.write(f"**Debug: Found these matching names: {matched_names}**")
+        # If we have multiple matches, prioritize exact matches
+        if len(matched_names) == 1:
+            st.write(f"**Debug: Found specific match: {matched_names[0]}**")
+        else:
+            st.write(f"**Debug: Found {len(matched_names)} matches: {matched_names}**")
 
-        # Now get the full records for these names
+        # Get the full records
         all_content = []
         if hasattr(vectorstore, "docstore") and hasattr(
             vectorstore, "index_to_docstore_id"
@@ -1293,53 +1486,57 @@ def handle_specific_person_query(query: str, vectorstore) -> str:
         # Find the full records for the matched names
         found_records = []
         for name in matched_names:
-            # Split name into first and last
             name_parts = name.split()
             if len(name_parts) >= 2:
                 first_name = name_parts[0]
-                last_name = " ".join(name_parts[1:])  # Handle names like "Van Der Berg"
+                last_name = " ".join(name_parts[1:])
 
-                # Search for the exact pattern in the content
-                pattern = f"FIRST_NAME: {first_name} | LAST_NAME: {last_name}"
-
-                # Find the record containing this pattern
                 lines = combined_content.split("\n")
                 for i, line in enumerate(lines):
-                    if pattern in line:
-                        # Get the full record (this line plus several after it)
+                    if (
+                        first_name.lower() in line.lower()
+                        and last_name.lower() in line.lower()
+                    ):
                         record_lines = []
                         for j in range(i, min(i + 10, len(lines))):
                             record_lines.append(lines[j])
-                            # Stop when we hit the next record or end
                             if j > i and (
-                                "Record " in lines[j] and "FIRST_NAME:" in lines[j]
+                                "Record " in lines[j]
+                                and any(
+                                    name_part in lines[j]
+                                    for name_part in [first_name, last_name]
+                                )
                             ):
                                 break
-
                         found_records.append("\n".join(record_lines))
                         break
 
         if found_records:
-            st.write(f"**Debug: Found {len(found_records)} complete records**")
-
-            # Use LLM to format the response
             llm = ChatGroq(
-                model="llama-3.3-70b-versatile",
-                temperature=0,
-                max_tokens=4096,
+                model="llama-3.3-70b-versatile", temperature=0, max_tokens=4096
             )
-
             records_text = "\n\n".join(found_records)
 
-            prompt = f"""
-            Question: {query}
-            
-            Here are the complete database records for the person(s) you asked about:
-            
-            {records_text}
-            
-            Please provide a clear, organized response with all the information for the person requested.
-            """
+            # Improved prompt for specific person queries
+            if len(matched_names) == 1:
+                prompt = f"""
+                Question: {query}
+                Here is the database record for {matched_names[0]}:
+                {records_text}
+                
+                Please provide a direct answer to the specific question asked about {matched_names[0]}.
+                If asked for phone number, just give the phone number.
+                If asked for email, just give the email.
+                If asked for general info, provide all details.
+                """
+            else:
+                prompt = f"""
+                Question: {query}
+                Here are the database records for the people you asked about:
+                {records_text}
+                
+                Please provide the requested information for each person.
+                """
 
             response = llm.invoke(prompt)
             return response.content
@@ -1567,7 +1764,7 @@ with sitemap_options_col:
 html_col, html_options_col = st.columns([3, 1])
 with html_col:
     html_dir = st.text_input(
-        "Enter path to HTML files directory:",
+        "Enter path to HTML files directory: /mnt/c/AI/Add/html",
         placeholder="e.g., C:/Documents/html_files or /home/user/html_files",
     )
 with html_options_col:
@@ -1583,7 +1780,7 @@ with html_options_col:
 docx_col, docx_options_col = st.columns([3, 1])
 with docx_col:
     docx_dir = st.text_input(
-        "Enter path to DOCX files directory:",
+        "Enter path to DOCX files directory:  /mnt/c/AI/Add/docx",
         placeholder="e.g., C:/Documents/docx_files or /home/user/docx_files",
     )
 with docx_options_col:
@@ -1599,7 +1796,7 @@ with docx_options_col:
 pdf_col, pdf_options_col = st.columns([3, 1])
 with pdf_col:
     pdf_dir = st.text_input(
-        "Enter path to PDF files directory:",
+        "Enter path to PDF files directory:  /mnt/c/AI/Add/pdf",
         placeholder="e.g., C:/Documents/pdf_files or /home/user/pdf_files",
     )
 with pdf_options_col:
@@ -1615,7 +1812,7 @@ with pdf_options_col:
 pptx_col, pptx_options_col = st.columns([3, 1])
 with pptx_col:
     pptx_dir = st.text_input(
-        "Enter path to PowerPoint files directory:",
+        "Enter path to PowerPoint files directory: /mnt/c/AI/Add/pptx",
         placeholder="e.g., C:/Documents/pptx_files or /home/user/pptx_files",
     )
 with pptx_options_col:
@@ -1631,7 +1828,7 @@ with pptx_options_col:
 xlsx_col, xlsx_options_col = st.columns([3, 1])
 with xlsx_col:
     xlsx_dir = st.text_input(
-        "Enter path to Excel files directory:",
+        "Enter path to Excel files directory: /mnt/c/AI/Add/xlsx",
         placeholder="e.g., C:/Documents/xlsx_files or /home/user/xlsx_files",
     )
 with xlsx_options_col:
