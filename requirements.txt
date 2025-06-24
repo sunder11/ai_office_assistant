@@ -1,6 +1,51 @@
 
 #pip install -r requirements.txt 
-#some are probably missing but pip install the missing ones.
+#some may be missing but pip install the missing ones if you get an error.
+
+#uncomment faiss-gpu and comment faiss-cpu if you have a useful gpu.
+
+#you also have to install pop and tesseract globally
+#sudo apt install poppler-utils
+#sudo apt install tesseract-ocr
+#uncomment the following to confirm they are working with a button on the ui.
+
+# with col4:
+#     # Add this test button for OCR Programs Installed
+#     if st.button("🧪 Test Poppler", key="test_poppler"):
+#         try:
+#             import subprocess
+
+#             # Test if poppler is accessible
+#             result = subprocess.run(["pdftoppm", "-h"], capture_output=True, text=True)
+#             if result.returncode == 0:
+#                 st.success("✅ Poppler is installed and accessible!")
+#             else:
+#                 st.error("❌ Poppler not found in PATH")
+#         except FileNotFoundError:
+#             st.error("❌ Poppler not installed or not in PATH")
+#             st.write("**Install instructions:**")
+#             st.code("sudo apt install poppler-utils")
+#         except Exception as e:
+#             st.error(f"❌ Error testing Poppler: {e}")
+
+# with col4:
+#     if st.button("🧪 Test OCR", key="test_ocr_setup"):
+#         try:
+#             import pytesseract
+#             import pdf2image
+#             from PIL import Image
+
+#             st.success("✅ All OCR libraries are installed!")
+#             # Test Tesseract
+#             version = pytesseract.get_tesseract_version()
+#             st.write(f"📝 Tesseract version: {version}")
+#         except ImportError as e:
+#             st.error(f"❌ Missing library: {e}")
+#             st.write("Install with: `pip install pytesseract pillow pdf2image`")
+#         except Exception as e:
+#             st.error(f"❌ Tesseract not found: {e}")
+#             st.write("Install Tesseract: https://github.com/UB-Mannheim/tesseract/wiki")
+
 
 docling==2.37.0
 python-dotenv==1.0.1
@@ -21,3 +66,12 @@ sentence-transformers==3.0.1
 nltk==3.8.1
 
 urllib3==2.4.0
+
+numpy==2.3.1
+openpyxl==3.1.5
+pandas==2.3.0
+pdf2image==1.17.0
+Pillow==11.2.1
+
+python_pptx==1.0.2
+Requests==2.32.4
