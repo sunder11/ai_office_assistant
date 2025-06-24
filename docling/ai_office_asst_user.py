@@ -1059,7 +1059,7 @@ def initialize_storage():
         chat_history = load_chat_history()
         if chat_history:
             st.session_state.chat_history = chat_history
-        st.sidebar.success(f"Loaded {len(urls)} previously processed items")
+        # st.sidebar.success(f"Loaded {len(urls)} previously processed items")
     return True
 
 
@@ -1090,45 +1090,52 @@ atexit.register(on_shutdown)
 
 ##################### QUERY CONFIGURATION (begin) #################
 
+
 def handle_name_listing_query(query: str, vectorstore) -> str:
     """Handle queries asking for lists of people with specific names"""
     try:
         # Extract the target name from the query
         query_lower = query.lower()
         words = query.split()
-        
+
         # Find the name they're asking about
         target_name = None
         name_triggers = ["named", "name", "first", "last"]
-        
+
         for i, word in enumerate(words):
             if word.lower() in name_triggers and i + 1 < len(words):
                 # Get the next word as the target name
-                target_name = words[i + 1].replace(',', '').replace('.', '').capitalize()
+                target_name = (
+                    words[i + 1].replace(",", "").replace(".", "").capitalize()
+                )
                 break
-        
+
         if not target_name:
             return "I couldn't identify which name you're looking for. Please try 'list people named Robert' or 'people with first name John'."
-        
-        st.write(f"**Debug: Looking for people named '{target_name}'**")
-        
+
+        # st.write(f"**Debug: Looking for people named '{target_name}'**")
+
         # Get all names from database
         all_names = get_all_names_from_vectorstore_improved(vectorstore)
-        
+
         # Find matches
         matching_names = []
         for db_name in all_names:
             name_parts = db_name.split()
-            
+
             # Check first name match
             if name_parts[0].lower() == target_name.lower():
                 matching_names.append(db_name)
             # Check last name match
-            elif len(name_parts) > 1 and any(part.lower() == target_name.lower() for part in name_parts[1:]):
+            elif len(name_parts) > 1 and any(
+                part.lower() == target_name.lower() for part in name_parts[1:]
+            ):
                 matching_names.append(db_name)
-        
+
         if matching_names:
-            result = f"Found {len(matching_names)} people with the name '{target_name}':\n\n"
+            result = (
+                f"Found {len(matching_names)} people with the name '{target_name}':\n\n"
+            )
             for i, name in enumerate(matching_names, 1):
                 result += f"{i}. {name}\n"
             return result
@@ -1138,7 +1145,7 @@ def handle_name_listing_query(query: str, vectorstore) -> str:
             for db_name in all_names:
                 if target_name.lower() in db_name.lower():
                     similar_names.append(db_name)
-            
+
             if similar_names:
                 result = f"No exact matches for '{target_name}', but found similar names:\n\n"
                 for i, name in enumerate(similar_names[:20], 1):  # Show up to 20
@@ -1146,9 +1153,10 @@ def handle_name_listing_query(query: str, vectorstore) -> str:
                 return result
             else:
                 return f"No people found with the name '{target_name}'."
-                
+
     except Exception as e:
         return f"Error processing name listing query: {str(e)}"
+
 
 def handle_improved_query_routing(query: str, vectorstore) -> str:
     """Improved query routing with clearer logic"""
@@ -1197,7 +1205,7 @@ def handle_improved_query_routing(query: str, vectorstore) -> str:
                 "show all people named",
             ]
         ):
-            st.write("**Debug: Routing to name listing handler**")
+            # st.write("**Debug: Routing to name listing handler**")
             return handle_name_listing_query(query, vectorstore)
 
         # 3. Document queries (agreements, summaries, etc.)
@@ -1211,7 +1219,7 @@ def handle_improved_query_routing(query: str, vectorstore) -> str:
                 "document",
             ]
         ):
-            st.write("**Debug: Routing to document handler**")
+            # st.write("**Debug: Routing to document handler**")
             return handle_document_query(query, vectorstore)
 
         # 4. Person-specific queries
@@ -1281,10 +1289,10 @@ def handle_improved_query_routing(query: str, vectorstore) -> str:
             ]
 
             if potential_names:
-                st.write("**Debug: Routing to person handler**")
+                # st.write("**Debug: Routing to person handler**")
                 return handle_specific_person_query(query, vectorstore)
             else:
-                st.write("**Debug: No names detected, using regular chain**")
+                # st.write("**Debug: No names detected, using regular chain**")
                 if "conversation_chain" in st.session_state:
                     response = st.session_state.conversation_chain({"question": query})
                     return response["answer"]
@@ -1293,7 +1301,7 @@ def handle_improved_query_routing(query: str, vectorstore) -> str:
 
         # 5. Everything else - use regular conversation chain
         else:
-            st.write("**Debug: Using regular conversation chain**")
+            # st.write("**Debug: Using regular conversation chain**")
             if "conversation_chain" in st.session_state:
                 response = st.session_state.conversation_chain({"question": query})
                 return response["answer"]
@@ -1414,26 +1422,26 @@ def handle_specific_person_query(query: str, vectorstore) -> str:
             potential_names, key=lambda x: (len(x.split()), len(x)), reverse=True
         )
 
-        st.write(f"**Debug: Looking for these names: {potential_names}**")
+        # st.write(f"**Debug: Looking for these names: {potential_names}**")
 
         if not potential_names:
             return "I couldn't identify any names in your query. Please try asking like 'What is John Smith's phone number?'"
 
         # Get ALL the names from the database
         all_names = get_all_names_from_vectorstore_improved(vectorstore)
-        st.write(f"**Debug: Total names in database: {len(all_names)}**")
+        # st.write(f"**Debug: Total names in database: {len(all_names)}**")
 
         # Find matches with priority for exact full name matches
         matched_names = []
 
         for search_name in potential_names:
-            st.write(f"**Debug: Searching for '{search_name}'**")
+            # st.write(f"**Debug: Searching for '{search_name}'**")
 
             # First, try exact matches (case insensitive)
             for db_name in all_names:
                 if search_name.lower() == db_name.lower():
                     matched_names.append(db_name)
-                    st.write(f"**Debug: EXACT MATCH FOUND: {db_name}**")
+                    # st.write(f"**Debug: EXACT MATCH FOUND: {db_name}**")
                     # If we found an exact match for a full name, we can stop here
                     if len(search_name.split()) > 1:
                         break
@@ -1453,7 +1461,7 @@ def handle_specific_person_query(query: str, vectorstore) -> str:
                     db_parts = db_name.lower().split()
                     if all(part in db_parts for part in search_parts):
                         matched_names.append(db_name)
-                        st.write(f"**Debug: PARTIAL MATCH: {db_name}**")
+                        # st.write(f"**Debug: PARTIAL MATCH: {db_name}**")
 
         if not matched_names:
             similar_names = [
@@ -1464,10 +1472,10 @@ def handle_specific_person_query(query: str, vectorstore) -> str:
             return f"I couldn't find matches for: {potential_names}. Similar names: {similar_names[:10]}"
 
         # If we have multiple matches, prioritize exact matches
-        if len(matched_names) == 1:
-            st.write(f"**Debug: Found specific match: {matched_names[0]}**")
-        else:
-            st.write(f"**Debug: Found {len(matched_names)} matches: {matched_names}**")
+        # if len(matched_names) == 1:
+        # st.write(f"**Debug: Found specific match: {matched_names[0]}**")
+        # else:
+        # st.write(f"**Debug: Found {len(matched_names)} matches: {matched_names}**")
 
         # Get the full records
         all_content = []
@@ -1544,7 +1552,7 @@ def handle_specific_person_query(query: str, vectorstore) -> str:
             return f"Found matching names {matched_names} but couldn't retrieve their full records."
 
     except Exception as e:
-        st.write(f"**Debug: Error: {str(e)}**")
+        # st.write(f"**Debug: Error: {str(e)}**")
         return f"Error: {str(e)}"
 
 
@@ -1564,7 +1572,7 @@ def handle_document_query(query: str, vectorstore) -> str:
             return "I couldn't find any relevant documents for your query."
 
         # Show debug info
-        st.write(f"**Debug: Found {len(relevant_docs)} relevant chunks**")
+        # st.write(f"**Debug: Found {len(relevant_docs)} relevant chunks**")
 
         # Group documents by source
         docs_by_source = {}
@@ -1576,7 +1584,7 @@ def handle_document_query(query: str, vectorstore) -> str:
                 docs_by_source[file_name] = []
             docs_by_source[file_name].append(doc)
 
-        st.write(f"**Debug: Documents involved: {list(docs_by_source.keys())}**")
+        # st.write(f"**Debug: Documents involved: {list(docs_by_source.keys())}**")
 
         # Combine content from relevant documents
         combined_content = []
@@ -1730,6 +1738,22 @@ def process_pdf_with_ocr(file_path: str) -> Document:
 st.set_page_config(page_title="Chat with Website", page_icon="", layout="wide")
 st.title("CLAUDIA  🦙(LLAMA 3.3)")
 
+st.markdown(
+    """
+    <style>
+        .reportview-container {
+            margin-top: -2em;
+        }
+        #MainMenu {visibility: hidden;}
+        .stDeployButton {display:none;}
+        footer {visibility: hidden;}
+        #stDecoration {display:none;}      
+    </style>
+""",
+    unsafe_allow_html=True,
+)
+
+
 # Initialize session state
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
@@ -1742,130 +1766,130 @@ if "storage_initialized" not in st.session_state:
     st.session_state.storage_initialized = True
 
 # Document loading options
-st.subheader("Load Content")
+# st.subheader("Load Content")
 
-# Sitemap input
-sitemap_col, sitemap_options_col = st.columns([3, 1])
-with sitemap_col:
-    sitemap_url = st.text_input(
-        "Enter website sitemap URL:",
-        placeholder="e.g., https://example.com/sitemap.xml",
-    )
-with sitemap_options_col:
-    max_urls = st.slider(
-        "Max URLs",
-        min_value=1,
-        max_value=100,
-        value=50,
-        help="Limit the number of URLs to process",
-    )
+# # Sitemap input
+# sitemap_col, sitemap_options_col = st.columns([3, 1])
+# with sitemap_col:
+#     sitemap_url = st.text_input(
+#         "Enter website sitemap URL:",
+#         placeholder="e.g., https://example.com/sitemap.xml",
+#     )
+# with sitemap_options_col:
+#     max_urls = st.slider(
+#         "Max URLs",
+#         min_value=1,
+#         max_value=100,
+#         value=50,
+#         help="Limit the number of URLs to process",
+#     )
 
-# Local HTML directory input
-html_col, html_options_col = st.columns([3, 1])
-with html_col:
-    html_dir = st.text_input(
-        "Enter path to HTML files directory: /mnt/c/AI/Add/html",
-        placeholder="e.g., C:/Documents/html_files or /home/user/html_files",
-    )
-with html_options_col:
-    max_html_files = st.slider(
-        "Max HTML files",
-        min_value=1,
-        max_value=100,
-        value=50,
-        help="Limit the number of HTML files to process",
-    )
+# # Local HTML directory input
+# html_col, html_options_col = st.columns([3, 1])
+# with html_col:
+#     html_dir = st.text_input(
+#         "Enter path to HTML files directory: /mnt/c/AI/Add/html",
+#         placeholder="e.g., C:/Documents/html_files or /home/user/html_files",
+#     )
+# with html_options_col:
+#     max_html_files = st.slider(
+#         "Max HTML files",
+#         min_value=1,
+#         max_value=100,
+#         value=50,
+#         help="Limit the number of HTML files to process",
+#     )
 
-# Local DOCX directory input
-docx_col, docx_options_col = st.columns([3, 1])
-with docx_col:
-    docx_dir = st.text_input(
-        "Enter path to DOCX files directory:  /mnt/c/AI/Add/docx",
-        placeholder="e.g., C:/Documents/docx_files or /home/user/docx_files",
-    )
-with docx_options_col:
-    max_docx_files = st.slider(
-        "Max DOCX files",
-        min_value=1,
-        max_value=100,
-        value=50,
-        help="Limit the number of DOCX files to process",
-    )
+# # Local DOCX directory input
+# docx_col, docx_options_col = st.columns([3, 1])
+# with docx_col:
+#     docx_dir = st.text_input(
+#         "Enter path to DOCX files directory:  /mnt/c/AI/Add/docx",
+#         placeholder="e.g., C:/Documents/docx_files or /home/user/docx_files",
+#     )
+# with docx_options_col:
+#     max_docx_files = st.slider(
+#         "Max DOCX files",
+#         min_value=1,
+#         max_value=100,
+#         value=50,
+#         help="Limit the number of DOCX files to process",
+#     )
 
-# Local PDF directory input
-pdf_col, pdf_options_col = st.columns([3, 1])
-with pdf_col:
-    pdf_dir = st.text_input(
-        "Enter path to PDF files directory:  /mnt/c/AI/Add/pdf",
-        placeholder="e.g., C:/Documents/pdf_files or /home/user/pdf_files",
-    )
-with pdf_options_col:
-    max_pdf_files = st.slider(
-        "Max PDF files",
-        min_value=1,
-        max_value=100,
-        value=50,
-        help="Limit the number of PDF files to process",
-    )
+# # Local PDF directory input
+# pdf_col, pdf_options_col = st.columns([3, 1])
+# with pdf_col:
+#     pdf_dir = st.text_input(
+#         "Enter path to PDF files directory:  /mnt/c/AI/Add/pdf",
+#         placeholder="e.g., C:/Documents/pdf_files or /home/user/pdf_files",
+#     )
+# with pdf_options_col:
+#     max_pdf_files = st.slider(
+#         "Max PDF files",
+#         min_value=1,
+#         max_value=100,
+#         value=50,
+#         help="Limit the number of PDF files to process",
+#     )
 
-# Local PowerPoint directory input
-pptx_col, pptx_options_col = st.columns([3, 1])
-with pptx_col:
-    pptx_dir = st.text_input(
-        "Enter path to PowerPoint files directory: /mnt/c/AI/Add/pptx",
-        placeholder="e.g., C:/Documents/pptx_files or /home/user/pptx_files",
-    )
-with pptx_options_col:
-    max_pptx_files = st.slider(
-        "Max PPTX files",
-        min_value=1,
-        max_value=100,
-        value=50,
-        help="Limit the number of PowerPoint files to process",
-    )
+# # Local PowerPoint directory input
+# pptx_col, pptx_options_col = st.columns([3, 1])
+# with pptx_col:
+#     pptx_dir = st.text_input(
+#         "Enter path to PowerPoint files directory: /mnt/c/AI/Add/pptx",
+#         placeholder="e.g., C:/Documents/pptx_files or /home/user/pptx_files",
+#     )
+# with pptx_options_col:
+#     max_pptx_files = st.slider(
+#         "Max PPTX files",
+#         min_value=1,
+#         max_value=100,
+#         value=50,
+#         help="Limit the number of PowerPoint files to process",
+#     )
 
-# Local Excel directory input
-xlsx_col, xlsx_options_col = st.columns([3, 1])
-with xlsx_col:
-    xlsx_dir = st.text_input(
-        "Enter path to Excel files directory: /mnt/c/AI/Add/xlsx",
-        placeholder="e.g., C:/Documents/xlsx_files or /home/user/xlsx_files",
-    )
-with xlsx_options_col:
-    max_xlsx_files = st.slider(
-        "Max Excel files",
-        min_value=1,
-        max_value=100,
-        value=50,
-        help="Limit the number of Excel files to process",
-    )
+# # Local Excel directory input
+# xlsx_col, xlsx_options_col = st.columns([3, 1])
+# with xlsx_col:
+#     xlsx_dir = st.text_input(
+#         "Enter path to Excel files directory: /mnt/c/AI/Add/xlsx",
+#         placeholder="e.g., C:/Documents/xlsx_files or /home/user/xlsx_files",
+#     )
+# with xlsx_options_col:
+#     max_xlsx_files = st.slider(
+#         "Max Excel files",
+#         min_value=1,
+#         max_value=100,
+#         value=50,
+#         help="Limit the number of Excel files to process",
+#     )
 
-# Process buttons
-col1, col2, col3, col4, col5, col6 = st.columns(6)
-with col1:
-    process_sitemap_button = st.button(
-        "Process Sitemap", type="primary", use_container_width=True
-    )
-with col2:
-    process_html_button = st.button(
-        "Process HTML", type="primary", use_container_width=True
-    )
-with col3:
-    process_docx_button = st.button(
-        "Process DOCX", type="primary", use_container_width=True
-    )
-with col4:
-    process_pdf_button = st.button(
-        "Process PDF", type="primary", use_container_width=True
-    )
-with col5:
-    process_pptx_button = st.button(
-        "Process PowerPoint", type="primary", use_container_width=True
-    )
-with col6:
-    process_xlsx_button = st.button(
-        "Process Excel", type="primary", use_container_width=True
-    )
+# # Process buttons
+# col1, col2, col3, col4, col5, col6 = st.columns(6)
+# with col1:
+#     process_sitemap_button = st.button(
+#         "Process Sitemap", type="primary", use_container_width=True
+#     )
+# with col2:
+#     process_html_button = st.button(
+#         "Process HTML", type="primary", use_container_width=True
+#     )
+# with col3:
+#     process_docx_button = st.button(
+#         "Process DOCX", type="primary", use_container_width=True
+#     )
+# with col4:
+#     process_pdf_button = st.button(
+#         "Process PDF", type="primary", use_container_width=True
+#     )
+# with col5:
+#     process_pptx_button = st.button(
+#         "Process PowerPoint", type="primary", use_container_width=True
+#     )
+# with col6:
+#     process_xlsx_button = st.button(
+#         "Process Excel", type="primary", use_container_width=True
+#     )
 
 # with col4:
 #     # Add this test button for OCR Programs Installed
@@ -1905,148 +1929,148 @@ with col6:
 #             st.write("Install Tesseract: https://github.com/UB-Mannheim/tesseract/wiki")
 
 # Process sitemap
-if process_sitemap_button and sitemap_url:
-    try:
-        documents, processed_urls = process_sitemap(sitemap_url, max_urls)
-        if documents:
-            st.success(
-                f"Successfully processed {len(documents)} pages from {len(processed_urls)} URLs"
-            )
-            # Create or update vectorstore
-            if "vectorstore" not in st.session_state:
-                st.session_state.vectorstore = setup_vectorstore(documents)
-            else:
-                st.session_state.vectorstore.add_documents(documents)
-            # Save data to persistent storage
-            save_vectorstore(st.session_state.vectorstore)
-            save_processed_content(sitemap_url, processed_urls, documents)
-            st.session_state.processed_urls.extend(processed_urls)
-            # Show processed URLs
-            with st.expander("Processed URLs", expanded=True):
-                for url in processed_urls:
-                    st.write(url)
-    except Exception as e:
-        st.error(f"Error processing sitemap: {str(e)}")
+# if process_sitemap_button and sitemap_url:
+#     try:
+#         documents, processed_urls = process_sitemap(sitemap_url, max_urls)
+#         if documents:
+#             st.success(
+#                 f"Successfully processed {len(documents)} pages from {len(processed_urls)} URLs"
+#             )
+#             # Create or update vectorstore
+#             if "vectorstore" not in st.session_state:
+#                 st.session_state.vectorstore = setup_vectorstore(documents)
+#             else:
+#                 st.session_state.vectorstore.add_documents(documents)
+#             # Save data to persistent storage
+#             save_vectorstore(st.session_state.vectorstore)
+#             save_processed_content(sitemap_url, processed_urls, documents)
+#             st.session_state.processed_urls.extend(processed_urls)
+#             # Show processed URLs
+#             with st.expander("Processed URLs", expanded=True):
+#                 for url in processed_urls:
+#                     st.write(url)
+#     except Exception as e:
+#         st.error(f"Error processing sitemap: {str(e)}")
 
-# Process HTML files
-if process_html_button and html_dir:
-    try:
-        documents, processed_files = process_local_directory(
-            html_dir, "html", max_html_files
-        )
-        if documents:
-            st.success(f"Successfully processed {len(documents)} HTML files")
-            # Create or update vectorstore
-            if "vectorstore" not in st.session_state:
-                st.session_state.vectorstore = setup_vectorstore(documents)
-            else:
-                st.session_state.vectorstore.add_documents(documents)
-            # Save data to persistent storage
-            save_vectorstore(st.session_state.vectorstore)
-            save_local_documents(documents, processed_files, "html")
-            st.session_state.processed_urls.extend(processed_files)
-            # Show processed files
-            with st.expander("Processed HTML Files", expanded=True):
-                for file_path in processed_files:
-                    st.write(os.path.basename(file_path))
-    except Exception as e:
-        st.error(f"Error processing HTML files: {str(e)}")
+# # Process HTML files
+# if process_html_button and html_dir:
+#     try:
+#         documents, processed_files = process_local_directory(
+#             html_dir, "html", max_html_files
+#         )
+#         if documents:
+#             st.success(f"Successfully processed {len(documents)} HTML files")
+#             # Create or update vectorstore
+#             if "vectorstore" not in st.session_state:
+#                 st.session_state.vectorstore = setup_vectorstore(documents)
+#             else:
+#                 st.session_state.vectorstore.add_documents(documents)
+#             # Save data to persistent storage
+#             save_vectorstore(st.session_state.vectorstore)
+#             save_local_documents(documents, processed_files, "html")
+#             st.session_state.processed_urls.extend(processed_files)
+#             # Show processed files
+#             with st.expander("Processed HTML Files", expanded=True):
+#                 for file_path in processed_files:
+#                     st.write(os.path.basename(file_path))
+#     except Exception as e:
+#         st.error(f"Error processing HTML files: {str(e)}")
 
-# Process DOCX files
-if process_docx_button and docx_dir:
-    try:
-        documents, processed_files = process_local_directory(
-            docx_dir, "docx", max_docx_files
-        )
-        if documents:
-            st.success(f"Successfully processed {len(documents)} DOCX files")
-            # Create or update vectorstore
-            if "vectorstore" not in st.session_state:
-                st.session_state.vectorstore = setup_vectorstore(documents)
-            else:
-                st.session_state.vectorstore.add_documents(documents)
-            # Save data to persistent storage
-            save_vectorstore(st.session_state.vectorstore)
-            save_local_documents(documents, processed_files, "docx")
-            st.session_state.processed_urls.extend(processed_files)
-            # Show processed files
-            with st.expander("Processed DOCX Files", expanded=True):
-                for file_path in processed_files:
-                    st.write(os.path.basename(file_path))
-    except Exception as e:
-        st.error(f"Error processing DOCX files: {str(e)}")
+# # Process DOCX files
+# if process_docx_button and docx_dir:
+#     try:
+#         documents, processed_files = process_local_directory(
+#             docx_dir, "docx", max_docx_files
+#         )
+#         if documents:
+#             st.success(f"Successfully processed {len(documents)} DOCX files")
+#             # Create or update vectorstore
+#             if "vectorstore" not in st.session_state:
+#                 st.session_state.vectorstore = setup_vectorstore(documents)
+#             else:
+#                 st.session_state.vectorstore.add_documents(documents)
+#             # Save data to persistent storage
+#             save_vectorstore(st.session_state.vectorstore)
+#             save_local_documents(documents, processed_files, "docx")
+#             st.session_state.processed_urls.extend(processed_files)
+#             # Show processed files
+#             with st.expander("Processed DOCX Files", expanded=True):
+#                 for file_path in processed_files:
+#                     st.write(os.path.basename(file_path))
+#     except Exception as e:
+#         st.error(f"Error processing DOCX files: {str(e)}")
 
-# Process PDF files
-if process_pdf_button and pdf_dir:
-    try:
-        documents, processed_files = process_local_directory(
-            pdf_dir, "pdf", max_pdf_files
-        )
-        if documents:
-            st.success(f"Successfully processed {len(documents)} PDF files")
-            # Create or update vectorstore
-            if "vectorstore" not in st.session_state:
-                st.session_state.vectorstore = setup_vectorstore(documents)
-            else:
-                st.session_state.vectorstore.add_documents(documents)
-            # Save data to persistent storage
-            save_vectorstore(st.session_state.vectorstore)
-            save_local_documents(documents, processed_files, "pdf")
-            st.session_state.processed_urls.extend(processed_files)
-            # Show processed files
-            with st.expander("Processed PDF Files", expanded=True):
-                for file_path in processed_files:
-                    st.write(os.path.basename(file_path))
-    except Exception as e:
-        st.error(f"Error processing PDF files: {str(e)}")
+# # Process PDF files
+# if process_pdf_button and pdf_dir:
+#     try:
+#         documents, processed_files = process_local_directory(
+#             pdf_dir, "pdf", max_pdf_files
+#         )
+#         if documents:
+#             st.success(f"Successfully processed {len(documents)} PDF files")
+#             # Create or update vectorstore
+#             if "vectorstore" not in st.session_state:
+#                 st.session_state.vectorstore = setup_vectorstore(documents)
+#             else:
+#                 st.session_state.vectorstore.add_documents(documents)
+#             # Save data to persistent storage
+#             save_vectorstore(st.session_state.vectorstore)
+#             save_local_documents(documents, processed_files, "pdf")
+#             st.session_state.processed_urls.extend(processed_files)
+#             # Show processed files
+#             with st.expander("Processed PDF Files", expanded=True):
+#                 for file_path in processed_files:
+#                     st.write(os.path.basename(file_path))
+#     except Exception as e:
+#         st.error(f"Error processing PDF files: {str(e)}")
 
-# Process PowerPoint files
-if process_pptx_button and pptx_dir:
-    try:
-        documents, processed_files = process_local_directory(
-            pptx_dir, "pptx", max_pptx_files
-        )
-        if documents:
-            st.success(f"Successfully processed {len(documents)} PowerPoint files")
-            # Create or update vectorstore
-            if "vectorstore" not in st.session_state:
-                st.session_state.vectorstore = setup_vectorstore(documents)
-            else:
-                st.session_state.vectorstore.add_documents(documents)
-            # Save data to persistent storage
-            save_vectorstore(st.session_state.vectorstore)
-            save_local_documents(documents, processed_files, "pptx")
-            st.session_state.processed_urls.extend(processed_files)
-            # Show processed files
-            with st.expander("Processed PowerPoint Files", expanded=True):
-                for file_path in processed_files:
-                    st.write(os.path.basename(file_path))
-    except Exception as e:
-        st.error(f"Error processing PowerPoint files: {str(e)}")
+# # Process PowerPoint files
+# if process_pptx_button and pptx_dir:
+#     try:
+#         documents, processed_files = process_local_directory(
+#             pptx_dir, "pptx", max_pptx_files
+#         )
+#         if documents:
+#             st.success(f"Successfully processed {len(documents)} PowerPoint files")
+#             # Create or update vectorstore
+#             if "vectorstore" not in st.session_state:
+#                 st.session_state.vectorstore = setup_vectorstore(documents)
+#             else:
+#                 st.session_state.vectorstore.add_documents(documents)
+#             # Save data to persistent storage
+#             save_vectorstore(st.session_state.vectorstore)
+#             save_local_documents(documents, processed_files, "pptx")
+#             st.session_state.processed_urls.extend(processed_files)
+#             # Show processed files
+#             with st.expander("Processed PowerPoint Files", expanded=True):
+#                 for file_path in processed_files:
+#                     st.write(os.path.basename(file_path))
+#     except Exception as e:
+#         st.error(f"Error processing PowerPoint files: {str(e)}")
 
-# Process Excel files
-if process_xlsx_button and xlsx_dir:
-    try:
-        documents, processed_files = process_local_directory(
-            xlsx_dir, "xlsx", max_xlsx_files
-        )
-        if documents:
-            st.success(f"Successfully processed {len(documents)} Excel files")
-            # Create or update vectorstore
-            if "vectorstore" not in st.session_state:
-                st.session_state.vectorstore = setup_vectorstore(documents)
-            else:
-                st.session_state.vectorstore.add_documents(documents)
-            # Save data to persistent storage
-            save_vectorstore(st.session_state.vectorstore)
-            save_local_documents(documents, processed_files, "xlsx")
-            st.session_state.processed_urls.extend(processed_files)
-            # Show processed files
-            with st.expander("Processed Excel Files", expanded=True):
-                for file_path in processed_files:
-                    st.write(os.path.basename(file_path))
-    except Exception as e:
-        st.error(f"Error processing Excel files: {str(e)}")
+# # Process Excel files
+# if process_xlsx_button and xlsx_dir:
+#     try:
+#         documents, processed_files = process_local_directory(
+#             xlsx_dir, "xlsx", max_xlsx_files
+#         )
+#         if documents:
+#             st.success(f"Successfully processed {len(documents)} Excel files")
+#             # Create or update vectorstore
+#             if "vectorstore" not in st.session_state:
+#                 st.session_state.vectorstore = setup_vectorstore(documents)
+#             else:
+#                 st.session_state.vectorstore.add_documents(documents)
+#             # Save data to persistent storage
+#             save_vectorstore(st.session_state.vectorstore)
+#             save_local_documents(documents, processed_files, "xlsx")
+#             st.session_state.processed_urls.extend(processed_files)
+#             # Show processed files
+#             with st.expander("Processed Excel Files", expanded=True):
+#                 for file_path in processed_files:
+#                     st.write(os.path.basename(file_path))
+#     except Exception as e:
+#         st.error(f"Error processing Excel files: {str(e)}")
 
 
 # # Add this as a completely separate section - put it after your other diagnostics
@@ -2196,221 +2220,222 @@ if process_xlsx_button and xlsx_dir:
 
 
 # Show loaded documents/URLs in sidebar
-with st.sidebar:
-    st.subheader("Processed Content")
-    if st.session_state.processed_urls:
-        # Get content statistics
-        stats = get_content_statistics()
-        st.write(f"**Total items:** {len(st.session_state.processed_urls)}")
-        # Show breakdown by type
-        if stats.get("web_pages", 0) > 0:
-            st.write(f"📄 Web pages: {stats['web_pages']}")
-        if stats.get("html_files", 0) > 0:
-            st.write(f"📝 HTML files: {stats['html_files']}")
-        if stats.get("docx_files", 0) > 0:
-            st.write(f"📘 DOCX files: {stats['docx_files']}")
-        if stats.get("pdf_files", 0) > 0:
-            st.write(f"📕 PDF files: {stats['pdf_files']}")
-        if stats.get("pptx_files", 0) > 0:
-            st.write(f"📊 PowerPoint files: {stats['pptx_files']}")
-        if stats.get("xlsx_files", 0) > 0:
-            st.write(f"📈 Excel files: {stats['xlsx_files']}")
-        with st.expander("View all items", expanded=False):
-            for item in st.session_state.processed_urls:
-                if item.startswith("http"):
-                    st.write(f"🌐 {item}")
-                else:
-                    st.write(f"📁 {os.path.basename(item)}")
+# with st.sidebar:
+# st.subheader("Processed Content")
+# if st.session_state.processed_urls:
+# Get content statistics
+# stats = get_content_statistics()
+# st.write(f"**Total items:** {len(st.session_state.processed_urls)}")
+# # Show breakdown by type
+# if stats.get("web_pages", 0) > 0:
+#     st.write(f"📄 Web pages: {stats['web_pages']}")
+# if stats.get("html_files", 0) > 0:
+#     st.write(f"📝 HTML files: {stats['html_files']}")
+# if stats.get("docx_files", 0) > 0:
+#     st.write(f"📘 DOCX files: {stats['docx_files']}")
+# if stats.get("pdf_files", 0) > 0:
+#     st.write(f"📕 PDF files: {stats['pdf_files']}")
+# if stats.get("pptx_files", 0) > 0:
+#     st.write(f"📊 PowerPoint files: {stats['pptx_files']}")
+# if stats.get("xlsx_files", 0) > 0:
+#     st.write(f"📈 Excel files: {stats['xlsx_files']}")
+# with st.expander("View all items", expanded=False):
+#     for item in st.session_state.processed_urls:
+#         if item.startswith("http"):
+#             st.write(f"🌐 {item}")
+#         else:
+#             st.write(f"📁 {os.path.basename(item)}")
 
-        # Initialize confirmation state
-        if "db_delete_confirmation" not in st.session_state:
-            st.session_state.db_delete_confirmation = False
+#     # Initialize confirmation state
+#     if "db_delete_confirmation" not in st.session_state:
+#         st.session_state.db_delete_confirmation = False
 
-        col1, col2 = st.columns(2)
-        with col1:
-            # Display different buttons based on confirmation state
-            if not st.session_state.db_delete_confirmation:
-                # Initial button
-                if st.button("Clear Database", type="primary"):
-                    st.session_state.db_delete_confirmation = True
-                    st.rerun()
-            else:
-                # Show warning and confirmation buttons
-                st.warning(
-                    "⚠️ Are you sure you want to delete all data? This cannot be undone."
-                )
-                # Yes button
-                if st.button("Yes, Delete", type="primary"):
-                    # Clear tables but keep structure
-                    conn = get_db_connection()
-                    cursor = conn.cursor()
-                    # Delete in the correct order to respect foreign key constraints
-                    cursor.execute("DELETE FROM pages")
-                    cursor.execute("DELETE FROM websites")
-                    cursor.execute("DELETE FROM documents")
-                    conn.commit()
-                    # Remove vector store files
-                    import shutil
+#     col1, col2 = st.columns(2)
+#     with col1:
+#         # Display different buttons based on confirmation state
+#         if not st.session_state.db_delete_confirmation:
+#             # Initial button
+#             if st.button("Clear Database", type="primary"):
+#                 st.session_state.db_delete_confirmation = True
+#                 st.rerun()
+#         else:
+#             # Show warning and confirmation buttons
+#             st.warning(
+#                 "⚠️ Are you sure you want to delete all data? This cannot be undone."
+#             )
+#             # Yes button
+#             if st.button("Yes, Delete", type="primary"):
+#                 # Clear tables but keep structure
+#                 conn = get_db_connection()
+#                 cursor = conn.cursor()
+#                 # Delete in the correct order to respect foreign key constraints
+#                 cursor.execute("DELETE FROM pages")
+#                 cursor.execute("DELETE FROM websites")
+#                 cursor.execute("DELETE FROM documents")
+#                 conn.commit()
+#                 # Remove vector store files
+#                 import shutil
 
-                    if os.path.exists(os.path.join(DATA_DIR, "faiss_index")):
-                        shutil.rmtree(os.path.join(DATA_DIR, "faiss_index"))
-                    # Clear session state but keep chat history
-                    for key in [
-                        "vectorstore",
-                        "conversation_chain",
-                        "processed_urls",
-                        "db_delete_confirmation",
-                    ]:
-                        if key in st.session_state:
-                            del st.session_state[key]
-                    st.success("Database cleared successfully!")
-                    st.rerun()
-                # No button
-                if st.button("No, Cancel"):
-                    st.session_state.db_delete_confirmation = False
-                    st.rerun()
+#     if os.path.exists(os.path.join(DATA_DIR, "faiss_index")):
+#         shutil.rmtree(os.path.join(DATA_DIR, "faiss_index"))
+#     # Clear session state but keep chat history
+#     for key in [
+#         "vectorstore",
+#         "conversation_chain",
+#         "processed_urls",
+#         "db_delete_confirmation",
+#     ]:
+#         if key in st.session_state:
+#             del st.session_state[key]
+#     st.success("Database cleared successfully!")
+#     st.rerun()
+# # No button
+# if st.button("No, Cancel"):
+#     st.session_state.db_delete_confirmation = False
+#     st.rerun()
 
-        with col2:
-            if st.button("Clear Chat History", type="secondary"):
-                # Clear only chat history
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM chat_history")
-                conn.commit()
-                # Clear chat history from session state
-                st.session_state.chat_history = []
-                # If conversation chain exists, reset its memory
-                if "conversation_chain" in st.session_state:
-                    # Create a new memory object
-                    llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
-                    memory = ConversationBufferMemory(
-                        llm=llm,
-                        output_key="answer",
-                        memory_key="chat_history",
-                        return_messages=True,
-                    )
-                    # Update the chain with the new memory
-                    st.session_state.conversation_chain.memory = memory
-                st.success("Chat history cleared!")
-                st.rerun()
-    else:
-        st.info("No content processed yet. Enter paths or URLs above to begin.")
+# with col2:
+# if st.button("Clear Chat History", type="secondary"):
+# if st.button("Clear Chat History"):
+#             # Clear only chat history
+#             conn = get_db_connection()
+#             cursor = conn.cursor()
+#             cursor.execute("DELETE FROM chat_history")
+#             conn.commit()
+#             # Clear chat history from session state
+#             st.session_state.chat_history = []
+#             # If conversation chain exists, reset its memory
+#             if "conversation_chain" in st.session_state:
+#                 # Create a new memory object
+#                 llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
+#                 memory = ConversationBufferMemory(
+#                     llm=llm,
+#                     output_key="answer",
+#                     memory_key="chat_history",
+#                     return_messages=True,
+#                 )
+#                 # Update the chain with the new memory
+#                 st.session_state.conversation_chain.memory = memory
+#             st.success("Chat history cleared!")
+#             st.rerun()
+# else:
+#   st.info("No content processed yet. Enter paths or URLs above to begin.")
 
 
 # Add this after the sidebar section and before the chat interface
-if "vectorstore" in st.session_state:
-    st.divider()
-    export_container = st.container()
-    with export_container:
-        st.subheader("Data Export")
-        # Create two columns for export buttons
-        col1, col2 = st.columns(2)
-        # Export Vector Database
-        with col1:
-            # Add export button for FAISS vectors
-            if st.button("Export Vectors to CSV", type="primary"):
-                with st.spinner("Exporting vectors..."):
-                    # Define the export function
-                    def export_faiss_vectors(filename="faiss_vectors.csv"):
-                        """Export FAISS vectors to CSV for external visualization"""
-                        try:
-                            vs = st.session_state.vectorstore
-                            # Get all the vectors and their IDs
-                            vectors = []
-                            ids = []
-                            metadata = []
-                            # Different vectorstores have different structures
-                            if hasattr(vs, "index_to_docstore_id") and hasattr(
-                                vs, "index"
-                            ):
-                                for i in range(len(vs.index_to_docstore_id)):
-                                    doc_id = vs.index_to_docstore_id.get(i)
-                                    if doc_id and doc_id in vs.docstore._dict:
-                                        # Get the document
-                                        doc = vs.docstore._dict[doc_id]
-                                        # Get the vector
-                                        vector = vs.index.reconstruct(i)
-                                        vectors.append(vector)
-                                        ids.append(doc_id)
-                                        # Enhanced metadata for different document types
-                                        meta = {
-                                            "source": doc.metadata.get("source", ""),
-                                            "content_preview": doc.page_content[:100],
-                                        }
-                                        if doc.metadata.get("type") == "web":
-                                            meta["title"] = doc.metadata.get(
-                                                "title", ""
-                                            )
-                                            meta["url"] = doc.metadata.get("url", "")
-                                        else:
-                                            meta["file_name"] = doc.metadata.get(
-                                                "file_name", ""
-                                            )
-                                            meta["file_type"] = doc.metadata.get(
-                                                "file_type", ""
-                                            )
-                                        metadata.append(meta)
-                            # Export to CSV
-                            import pandas as pd
-                            import numpy as np
+# if "vectorstore" in st.session_state:
+#     st.divider()
+#     export_container = st.container()
+#     with export_container:
+#         st.subheader("Data Export")
+#         # Create two columns for export buttons
+#         col1, col2 = st.columns(2)
+#         # Export Vector Database
+#         with col1:
+#             # Add export button for FAISS vectors
+#             if st.button("Export Vectors to CSV", type="primary"):
+#                 with st.spinner("Exporting vectors..."):
+#                     # Define the export function
+#                     def export_faiss_vectors(filename="faiss_vectors.csv"):
+#                         """Export FAISS vectors to CSV for external visualization"""
+#                         try:
+#                             vs = st.session_state.vectorstore
+#                             # Get all the vectors and their IDs
+#                             vectors = []
+#                             ids = []
+#                             metadata = []
+#                             # Different vectorstores have different structures
+#                             if hasattr(vs, "index_to_docstore_id") and hasattr(
+#                                 vs, "index"
+#                             ):
+#                                 for i in range(len(vs.index_to_docstore_id)):
+#                                     doc_id = vs.index_to_docstore_id.get(i)
+#                                     if doc_id and doc_id in vs.docstore._dict:
+#                                         # Get the document
+#                                         doc = vs.docstore._dict[doc_id]
+#                                         # Get the vector
+#                                         vector = vs.index.reconstruct(i)
+#                                         vectors.append(vector)
+#                                         ids.append(doc_id)
+#                                         # Enhanced metadata for different document types
+#                                         meta = {
+#                                             "source": doc.metadata.get("source", ""),
+#                                             "content_preview": doc.page_content[:100],
+#                                         }
+#                                         if doc.metadata.get("type") == "web":
+#                                             meta["title"] = doc.metadata.get(
+#                                                 "title", ""
+#                                             )
+#                                             meta["url"] = doc.metadata.get("url", "")
+#                                         else:
+#                                             meta["file_name"] = doc.metadata.get(
+#                                                 "file_name", ""
+#                                             )
+#                                             meta["file_type"] = doc.metadata.get(
+#                                                 "file_type", ""
+#                                             )
+#                                         metadata.append(meta)
+#                             # Export to CSV
+#                             import pandas as pd
+#                             import numpy as np
 
-                            # Create a dataframe with metadata
-                            meta_df = pd.DataFrame(metadata)
-                            # Create a dataframe with vectors
-                            vector_df = pd.DataFrame(np.array(vectors))
-                            # Combine the dataframes
-                            result_df = pd.concat([meta_df, vector_df], axis=1)
-                            # Save to CSV
-                            result_df.to_csv(filename, index=False)
-                            return (
-                                True,
-                                f"Exported {len(vectors)} vectors to {filename}",
-                            )
-                        except Exception as e:
-                            return False, f"Error exporting vectors: {str(e)}"
+#                             # Create a dataframe with metadata
+#                             meta_df = pd.DataFrame(metadata)
+#                             # Create a dataframe with vectors
+#                             vector_df = pd.DataFrame(np.array(vectors))
+#                             # Combine the dataframes
+#                             result_df = pd.concat([meta_df, vector_df], axis=1)
+#                             # Save to CSV
+#                             result_df.to_csv(filename, index=False)
+#                             return (
+#                                 True,
+#                                 f"Exported {len(vectors)} vectors to {filename}",
+#                             )
+#                         except Exception as e:
+#                             return False, f"Error exporting vectors: {str(e)}"
 
-                    # Export the vectors to a file in the data directory
-                    export_path = os.path.join(DATA_DIR, "faiss_vectors.csv")
-                    success, message = export_faiss_vectors(export_path)
-                    if success:
-                        st.success(message)
-                        # Create a download link for the exported file
-                        with open(export_path, "rb") as file:
-                            st.download_button(
-                                label="Download Vector CSV",
-                                data=file,
-                                file_name="faiss_vectors.csv",
-                                mime="text/csv",
-                            )
-                    else:
-                        st.error(message)
+#                     # Export the vectors to a file in the data directory
+#                     export_path = os.path.join(DATA_DIR, "faiss_vectors.csv")
+#                     success, message = export_faiss_vectors(export_path)
+#                     if success:
+#                         st.success(message)
+#                         # Create a download link for the exported file
+#                         with open(export_path, "rb") as file:
+#                             st.download_button(
+#                                 label="Download Vector CSV",
+#                                 data=file,
+#                                 file_name="faiss_vectors.csv",
+#                                 mime="text/csv",
+#                             )
+#                     else:
+#                         st.error(message)
 
-        # Export SQLite Database
-        with col2:
-            if st.button("Export SQLite Database", type="primary"):
-                with st.spinner("Preparing SQLite database for export..."):
-                    try:
-                        # Create a copy of the database for export
-                        import shutil
+#         # Export SQLite Database
+#         with col2:
+#             if st.button("Export SQLite Database", type="primary"):
+#                 with st.spinner("Preparing SQLite database for export..."):
+#                     try:
+#                         # Create a copy of the database for export
+#                         import shutil
 
-                        export_db_path = os.path.join(
-                            DATA_DIR, "website_data_export.db"
-                        )
-                        # Close any existing connections before copying
-                        close_db_connection()
-                        # Copy the database file
-                        shutil.copy2(DB_PATH, export_db_path)
-                        st.success("SQLite database prepared for download!")
-                        # Create download button for the SQLite file
-                        with open(export_db_path, "rb") as file:
-                            st.download_button(
-                                label="Download SQLite Database",
-                                data=file,
-                                file_name="website_data.db",
-                                mime="application/x-sqlite3",
-                            )
-                    except Exception as e:
-                        st.error(f"Error exporting SQLite database: {str(e)}")
+#                         export_db_path = os.path.join(
+#                             DATA_DIR, "website_data_export.db"
+#                         )
+#                         # Close any existing connections before copying
+#                         close_db_connection()
+#                         # Copy the database file
+#                         shutil.copy2(DB_PATH, export_db_path)
+#                         st.success("SQLite database prepared for download!")
+#                         # Create download button for the SQLite file
+#                         with open(export_db_path, "rb") as file:
+#                             st.download_button(
+#                                 label="Download SQLite Database",
+#                                 data=file,
+#                                 file_name="website_data.db",
+#                                 mime="application/x-sqlite3",
+#                             )
+#                     except Exception as e:
+#                         st.error(f"Error exporting SQLite database: {str(e)}")
 
 
 # Initialize conversation chain if vectorstore exists
@@ -2424,14 +2449,14 @@ if "vectorstore" in st.session_state and "conversation_chain" not in st.session_
 # Chat interface
 if "vectorstore" in st.session_state:
     st.divider()
-    st.subheader("Ask Claudia - Your AI Assistant")
+    st.subheader("Ask Claudia:")
     # Display chat history
     for message in st.session_state.chat_history:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
 # Chat input
-user_input = st.chat_input("Ask about the website content...")
+user_input = st.chat_input("Ask for Office Information...")
 
 if user_input and user_input.strip():
     # Add user message to chat history
@@ -2453,8 +2478,31 @@ if user_input and user_input.strip():
     st.session_state.chat_history.append(
         {"role": "assistant", "content": assistant_response}
     )
+
     # Save chat history to database
     save_chat_history(st.session_state.chat_history)
 
 
 ##################################### Chat Handler (End)
+if st.button("Clear Chat History"):
+    # Clear only chat history
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM chat_history")
+    conn.commit()
+    # Clear chat history from session state
+    st.session_state.chat_history = []
+    # If conversation chain exists, reset its memory
+    if "conversation_chain" in st.session_state:
+        # Create a new memory object
+        llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
+        memory = ConversationBufferMemory(
+            llm=llm,
+            output_key="answer",
+            memory_key="chat_history",
+            return_messages=True,
+        )
+        # Update the chain with the new memory
+        st.session_state.conversation_chain.memory = memory
+    st.success("Chat history cleared!")
+    st.rerun()
