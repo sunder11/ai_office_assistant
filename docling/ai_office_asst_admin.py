@@ -1079,6 +1079,101 @@ def get_content_statistics():
     return stats
 
 
+def delete_data_by_type(data_type: str):
+    """Delete data of a specific type from both SQLite and vector store"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        if data_type == "sitemap_html":
+            # Delete web pages (sitemap data)
+            cursor.execute("DELETE FROM pages")
+            cursor.execute("DELETE FROM websites")
+        else:
+            # Delete documents of specific file type
+            cursor.execute("DELETE FROM documents WHERE file_type = ?", (data_type,))
+
+        conn.commit()
+
+        # Rebuild vector store without the deleted data type
+        if "vectorstore" in st.session_state:
+            rebuild_vectorstore_without_type(data_type)
+
+        return True, f"Successfully deleted all {data_type} data"
+
+    except Exception as e:
+        conn.rollback()
+        return False, f"Error deleting {data_type} data: {str(e)}"
+
+
+def rebuild_vectorstore_without_type(deleted_type: str):
+    """Rebuild vector store excluding the deleted data type - FIXED VERSION"""
+    try:
+        # Instead of re-chunking everything, we need to preserve existing chunks
+        # and only remove the chunks belonging to the deleted type
+
+        if "vectorstore" not in st.session_state:
+            return
+
+        # Get the current vectorstore
+        vectorstore = st.session_state.vectorstore
+
+        # Collect all documents that should be kept
+        documents_to_keep = []
+
+        if hasattr(vectorstore, "docstore") and hasattr(
+            vectorstore, "index_to_docstore_id"
+        ):
+            for i in range(len(vectorstore.index_to_docstore_id)):
+                doc_id = vectorstore.index_to_docstore_id.get(i)
+                if doc_id and doc_id in vectorstore.docstore._dict:
+                    doc = vectorstore.docstore._dict[doc_id]
+
+                    # Check if this document should be kept
+                    should_keep = False
+
+                    if deleted_type == "sitemap_html":
+                        # FIXED: Keep if it's NOT a sitemap document (no 'url' in metadata)
+                        if "url" not in doc.metadata:
+                            should_keep = True
+                    else:
+                        # Keep if it's NOT the deleted file type
+                        if doc.metadata.get("file_type") != deleted_type:
+                            should_keep = True
+
+                    if should_keep:
+                        documents_to_keep.append(doc)
+
+        if documents_to_keep:
+            # Create new vectorstore with existing chunks (no re-chunking!)
+            embeddings = HuggingFaceEmbeddings()
+            new_vectorstore = FAISS.from_documents(documents_to_keep, embeddings)
+
+            # Update session state
+            st.session_state.vectorstore = new_vectorstore
+            save_vectorstore(new_vectorstore)
+
+            # Recreate conversation chain
+            st.session_state.conversation_chain = create_chain_with_custom_retriever(
+                new_vectorstore, k=50
+            )
+        else:
+            # No documents left, clear everything
+            if "vectorstore" in st.session_state:
+                del st.session_state["vectorstore"]
+            if "conversation_chain" in st.session_state:
+                del st.session_state["conversation_chain"]
+
+            # Remove vector store files
+            import shutil
+
+            if os.path.exists(os.path.join(DATA_DIR, "faiss_index")):
+                shutil.rmtree(os.path.join(DATA_DIR, "faiss_index"))
+
+    except Exception as e:
+        st.error(f"Error rebuilding vector store: {str(e)}")
+
+
 def on_shutdown():
     close_db_connection()
 
@@ -1736,7 +1831,7 @@ def process_pdf_with_ocr(file_path: str) -> Document:
 
 # Streamlit app configuration
 st.set_page_config(page_title="Claudia-Admin", page_icon="", layout="wide")
-st.title("CLAUDIA  🦙(LLAMA 3.3) - Admin") 
+st.title("CLAUDIA  🦙(LLAMA 3.3) - Admin")
 
 st.markdown(
     """
@@ -2219,12 +2314,14 @@ if process_xlsx_button and xlsx_dir:
 
 
 # Show loaded documents/URLs in sidebar
+# Show loaded documents/URLs in sidebar
 with st.sidebar:
     st.subheader("Processed Content")
     if st.session_state.processed_urls:
         # Get content statistics
         stats = get_content_statistics()
         st.write(f"**Total items:** {len(st.session_state.processed_urls)}")
+
         # Show breakdown by type
         if stats.get("web_pages", 0) > 0:
             st.write(f"📄 Web pages: {stats['web_pages']}")
@@ -2238,6 +2335,7 @@ with st.sidebar:
             st.write(f"📊 PowerPoint files: {stats['pptx_files']}")
         if stats.get("xlsx_files", 0) > 0:
             st.write(f"📈 Excel files: {stats['xlsx_files']}")
+
         with st.expander("View all items", expanded=False):
             for item in st.session_state.processed_urls:
                 if item.startswith("http"):
@@ -2245,10 +2343,16 @@ with st.sidebar:
                 else:
                     st.write(f"📁 {os.path.basename(item)}")
 
-        # Initialize confirmation state
+        # Initialize confirmation states
         if "db_delete_confirmation" not in st.session_state:
             st.session_state.db_delete_confirmation = False
 
+        # Initialize type-specific confirmation states
+        for data_type in ["sitemap_html", "html", "docx", "pdf", "pptx", "xlsx"]:
+            if f"delete_{data_type}_confirmation" not in st.session_state:
+                st.session_state[f"delete_{data_type}_confirmation"] = False
+
+        # Main delete buttons
         col1, col2 = st.columns(2)
         with col1:
             # Display different buttons based on confirmation state
@@ -2272,11 +2376,13 @@ with st.sidebar:
                     cursor.execute("DELETE FROM websites")
                     cursor.execute("DELETE FROM documents")
                     conn.commit()
+
                     # Remove vector store files
                     import shutil
 
                     if os.path.exists(os.path.join(DATA_DIR, "faiss_index")):
                         shutil.rmtree(os.path.join(DATA_DIR, "faiss_index"))
+
                     # Clear session state but keep chat history
                     for key in [
                         "vectorstore",
@@ -2286,8 +2392,10 @@ with st.sidebar:
                     ]:
                         if key in st.session_state:
                             del st.session_state[key]
+
                     st.success("Database cleared successfully!")
                     st.rerun()
+
                 # No button
                 if st.button("No, Cancel"):
                     st.session_state.db_delete_confirmation = False
@@ -2300,8 +2408,10 @@ with st.sidebar:
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM chat_history")
                 conn.commit()
+
                 # Clear chat history from session state
                 st.session_state.chat_history = []
+
                 # If conversation chain exists, reset its memory
                 if "conversation_chain" in st.session_state:
                     # Create a new memory object
@@ -2314,11 +2424,78 @@ with st.sidebar:
                     )
                     # Update the chain with the new memory
                     st.session_state.conversation_chain.memory = memory
+
                 st.success("Chat history cleared!")
                 st.rerun()
+
+        # Separator
+        st.markdown("---")
+        st.subheader("Delete by Data Type")
+
+        # Type-specific delete buttons
+        data_types = [
+            ("sitemap_html", "🌐 Sitemap HTML", stats.get("web_pages", 0)),
+            ("html", "📝 HTML Files", stats.get("html_files", 0)),
+            ("docx", "📘 DOCX Files", stats.get("docx_files", 0)),
+            ("pdf", "📕 PDF Files", stats.get("pdf_files", 0)),
+            ("pptx", "📊 PowerPoint Files", stats.get("pptx_files", 0)),
+            ("xlsx", "📈 Excel Files", stats.get("xlsx_files", 0)),
+        ]
+
+        for data_type, display_name, count in data_types:
+            if count > 0:  # Only show button if there's data of this type
+                confirmation_key = f"delete_{data_type}_confirmation"
+
+                if not st.session_state[confirmation_key]:
+                    # Initial delete button
+                    if st.button(
+                        f"Delete {display_name} ({count})", key=f"delete_{data_type}"
+                    ):
+                        st.session_state[confirmation_key] = True
+                        st.rerun()
+                else:
+                    # Show confirmation
+                    st.warning(f"⚠️ Delete all {display_name.lower()}?")
+
+                    col_yes, col_no = st.columns(2)
+                    with col_yes:
+                        if st.button("Yes", key=f"confirm_{data_type}", type="primary"):
+                            success, message = delete_data_by_type(data_type)
+                            if success:
+                                st.success(message)
+                                # Update processed URLs
+                                if data_type == "sitemap_html":
+                                    st.session_state.processed_urls = [
+                                        url
+                                        for url in st.session_state.processed_urls
+                                        if not url.startswith("http")
+                                    ]
+                                else:
+                                    # Remove files of this type from processed_urls
+                                    st.session_state.processed_urls = [
+                                        url
+                                        for url in st.session_state.processed_urls
+                                        if not (
+                                            not url.startswith("http")
+                                            and url.endswith(f".{data_type}")
+                                        )
+                                    ]
+                            else:
+                                st.error(message)
+
+                            st.session_state[confirmation_key] = False
+                            st.rerun()
+
+                    with col_no:
+                        if st.button("No", key=f"cancel_{data_type}"):
+                            st.session_state[confirmation_key] = False
+                            st.rerun()
+
+                # Add small space between buttons
+                st.write("")
+
     else:
         st.info("No content processed yet. Enter paths or URLs above to begin.")
-
 
 # Add this after the sidebar section and before the chat interface
 if "vectorstore" in st.session_state:
