@@ -1735,7 +1735,7 @@ def process_pdf_with_ocr(file_path: str) -> Document:
 
 
 # Streamlit app configuration
-st.set_page_config(page_title="Chat with Website", page_icon="", layout="wide")
+st.set_page_config(page_title="Claudia", page_icon="", layout="wide")
 st.title("CLAUDIA  🦙(LLAMA 3.3)")
 
 st.markdown(
