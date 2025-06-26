@@ -26,6 +26,13 @@ from pathlib import Path
 import glob
 import re
 
+import time
+import pickle
+import os
+from pathlib import Path
+
+
+
 # Load the environment variables
 load_dotenv()
 working_dir = os.path.dirname(os.path.abspath(__file__))
@@ -35,6 +42,239 @@ os.makedirs(DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(DATA_DIR, "website_data.db")
 # Thread-local storage for database connections
 _local = threading.local()
+
+
+### LOGIN
+# Simple file-based session storage
+SESSION_FILE = os.path.join(DATA_DIR, "session.pkl")
+
+
+def check_login_credentials(username: str, password: str) -> bool:
+    """Check if login credentials match environment variables"""
+    env_username = os.getenv("USER_USER")
+    env_password = os.getenv("USER_PASS")
+
+    if not env_username or not env_password:
+        st.error("Login credentials not configured in environment variables")
+        return False
+
+    return username == env_username and password == env_password
+
+
+def validate_login_input(username: str, password: str) -> tuple[bool, str]:
+    """Validate login input format"""
+    if not username or not password:
+        return False, "Please enter both username and password"
+
+    if len(username) > 10:
+        return False, "Username must be 10 characters or less"
+
+    if len(password) < 9:
+        return False, "Password must be at least 9 characters"
+
+    if len(password) > 25:
+        return False, "Password must be 25 characters or less"
+
+    return True, ""
+
+
+def save_session_to_file(username: str):
+    """Save session to file"""
+    try:
+        session_data = {
+            "username": username,
+            "login_time": time.time(),
+            "authenticated": True,
+        }
+        with open(SESSION_FILE, "wb") as f:
+            pickle.dump(session_data, f)
+        return True
+    except Exception as e:
+        st.error(f"Error saving session: {e}")
+        return False
+
+
+def load_session_from_file():
+    """Load session from file"""
+    try:
+        if not os.path.exists(SESSION_FILE):
+            return None
+
+        with open(SESSION_FILE, "rb") as f:
+            session_data = pickle.load(f)
+
+        # Check if session is still valid (24 hours)
+        login_time = session_data.get("login_time", 0)
+        hours_elapsed = (time.time() - login_time) / 3600
+
+        if hours_elapsed < 24 and session_data.get("authenticated", False):
+            return session_data
+        else:
+            # Session expired, remove file
+            clear_session_file()
+            return None
+    except Exception as e:
+        # File corrupted or error, remove it
+        clear_session_file()
+        return None
+
+
+def clear_session_file():
+    """Clear session file"""
+    try:
+        if os.path.exists(SESSION_FILE):
+            os.remove(SESSION_FILE)
+    except Exception:
+        pass
+
+
+def create_persistent_login(username: str):
+    """Create persistent login session"""
+    # Set Streamlit session state
+    st.session_state.authenticated = True
+    st.session_state.username = username
+    st.session_state.login_timestamp = time.time()
+    st.session_state.session_valid = True
+
+    # Save to file for persistence
+    save_session_to_file(username)
+
+
+def check_persistent_login():
+    """Check if there's a valid persistent login"""
+    # First check if already authenticated in current session
+    if st.session_state.get("authenticated", False) and st.session_state.get(
+        "session_valid", False
+    ):
+        # Double-check the session is still valid
+        login_time = st.session_state.get("login_timestamp", 0)
+        hours_elapsed = (time.time() - login_time) / 3600
+        if hours_elapsed < 24:
+            return True
+        else:
+            logout_silent()
+
+    # If not authenticated in session state, try to load from file
+    session_data = load_session_from_file()
+    if session_data:
+        # Restore session
+        st.session_state.authenticated = True
+        st.session_state.username = session_data["username"]
+        st.session_state.login_timestamp = session_data["login_time"]
+        st.session_state.session_valid = True
+        return True
+
+    return False
+
+
+def logout_silent():
+    """Clear authentication without rerun"""
+    keys_to_clear = ["authenticated", "username", "login_timestamp", "session_valid"]
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
+
+    # Clear session file
+    clear_session_file()
+
+
+def show_login_form():
+    """Display login form and handle authentication"""
+    st.set_page_config(
+        page_title="Login - Claudia User", page_icon="🔒", layout="centered"
+    )
+
+    # Apply CSS to hide menu and deploy button on login page
+    st.markdown(
+        """
+        <style>
+            .reportview-container {
+                margin-top: -2em;
+            }
+            #MainMenu {visibility: hidden;}
+            .stDeployButton {display:none;}
+            footer {visibility: hidden;}
+            #stDecoration {display:none;}
+            
+            /* Login form styling */
+            .stForm {
+                background-color: #f8f9fa;
+                padding: 2rem;
+                border-radius: 10px;
+                border: 2px solid #dee2e6;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            }
+        </style>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    # Center the login form
+    col1, col2, col3 = st.columns([1, 2, 1])
+
+    with col2:
+        st.title("🔒 Login Required")
+        st.markdown("---")
+
+        # Create login form
+        with st.form("login_form", clear_on_submit=False):
+            st.subheader("Claudia User Access")
+
+            username = st.text_input(
+                "Username",
+                max_chars=10,
+                placeholder="Enter username (max 10 chars)",
+                help="Maximum 10 characters",
+            )
+
+            password = st.text_input(
+                "Password",
+                type="password",
+                max_chars=25,
+                placeholder="Enter password (9-25 chars)",
+                help="Minimum 9 characters, maximum 25 characters",
+            )
+
+            login_button = st.form_submit_button(
+                "Login", type="primary", use_container_width=True
+            )
+
+            if login_button:
+                # Validate input format
+                is_valid, error_message = validate_login_input(username, password)
+
+                if not is_valid:
+                    st.error(error_message)
+                    return False
+
+                # Check credentials
+                if check_login_credentials(username, password):
+                    create_persistent_login(username)
+                    st.success("Login successful! Redirecting...")
+                    time.sleep(0.5)
+                    st.rerun()
+                else:
+                    st.error("Invalid username or password")
+                    return False
+
+    return False
+
+
+def check_authentication():
+    """Check if user is authenticated, show login if not"""
+    # Check for persistent login first
+    if check_persistent_login():
+        return True
+
+    # Show login form if not authenticated
+    show_login_form()
+    return False
+
+
+def logout():
+    """Clear authentication and force re-login"""
+    logout_silent()
+    st.rerun()
 
 
 def get_all_names_from_vectorstore_improved(vectorstore):
@@ -1734,9 +1974,29 @@ def process_pdf_with_ocr(file_path: str) -> Document:
         return None
 
 
-# Streamlit app configuration
-st.set_page_config(page_title="Claudia", page_icon="", layout="wide")
-st.title("CLAUDIA  🦙(LLAMA 3.3)")
+# Check authentication before showing the app
+if not check_authentication():
+    st.stop()
+
+# Streamlit app configuration (only runs if authenticated)
+st.set_page_config(page_title="Claudia-User", page_icon="🦙", layout="wide")
+
+# Add logout button in the top right
+col1, col2 = st.columns([4, 1])
+with col1:
+    st.title("CLAUDIA  🦙(LLAMA 3.3) - User")
+with col2:
+    # Show session info
+    login_time = st.session_state.get("login_timestamp", 0)
+    if login_time > 0:
+        hours_elapsed = (time.time() - login_time) / 3600
+        st.write(f"Welcome, {st.session_state.get('username', 'User')}")
+        st.caption(f"Session: {24 - int(hours_elapsed)}h remaining")
+    else:
+        st.write(f"Welcome, {st.session_state.get('username', 'User')}")
+
+    if st.button("Logout", type="secondary"):
+        logout()
 
 st.markdown(
     """
@@ -1747,12 +2007,11 @@ st.markdown(
         #MainMenu {visibility: hidden;}
         .stDeployButton {display:none;}
         footer {visibility: hidden;}
-        #stDecoration {display:none;}      
+        #stDecoration {display:none;}
     </style>
 """,
     unsafe_allow_html=True,
 )
-
 
 # Initialize session state
 if "chat_history" not in st.session_state:
