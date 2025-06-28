@@ -1425,6 +1425,265 @@ atexit.register(on_shutdown)
 ##################### QUERY CONFIGURATION (begin) #################
 
 
+def handle_improved_query_routing(query: str, vectorstore) -> str:
+    """Improved query routing with clearer logic and exceptions"""
+    try:
+        query_lower = query.lower()
+
+        # 1. EXACT name listing queries (very specific)
+        if any(
+            phrase in query_lower
+            for phrase in [
+                "list all names",
+                "show all names",
+                "all names in database",
+                "list the names",
+                "what names are in",
+                "list all people named",
+                "list people named",
+                "show people named",
+                "all people named",
+                "people with the first name",
+                "people with the last name",
+                "list all the people named",
+                "show all people named",
+            ]
+        ):
+            st.write("**Debug: Routing to name listing handler**")
+            if any(
+                phrase in query_lower
+                for phrase in [
+                    "list all names",
+                    "show all names",
+                    "all names in database",
+                    "list the names",
+                    "what names are in",
+                ]
+            ):
+                names = get_all_names_from_vectorstore_improved(vectorstore)
+                if names:
+                    return (
+                        f"Here are all {len(names)} names in the database:\n\n"
+                        + "\n".join([f"{i}. {name}" for i, name in enumerate(names, 1)])
+                    )
+                else:
+                    return "I couldn't find any names in the database."
+            else:
+                return handle_name_listing_query(query, vectorstore)
+
+        # 2. Name count queries
+        elif any(
+            phrase in query_lower
+            for phrase in ["how many names", "count names", "number of names"]
+        ):
+            names = get_all_names_from_vectorstore_improved(vectorstore)
+            return f"There are {len(names)} names in the database."
+
+        # 3. NEW: "Most recent" queries - HANDLE BEFORE general list queries
+        elif "most recent" in query_lower:
+            st.write("**Debug: Routing to most recent handler**")
+            # Get Excel content
+            all_content = []
+            if hasattr(vectorstore, "docstore") and hasattr(
+                vectorstore, "index_to_docstore_id"
+            ):
+                for i in range(len(vectorstore.index_to_docstore_id)):
+                    doc_id = vectorstore.index_to_docstore_id.get(i)
+                    if doc_id and doc_id in vectorstore.docstore._dict:
+                        doc = vectorstore.docstore._dict[doc_id]
+                        if doc.metadata.get("file_type") in ["xlsx", "xls"]:
+                            all_content.append(doc.page_content)
+
+            if all_content:
+                combined_content = "\n".join(all_content)
+                return find_most_recent_client(query, combined_content)
+            else:
+                return "I couldn't find any Excel data to search through."
+
+        # 4. NEW: Queries that start with "list" or "list all" - use Excel data (AFTER most recent check)
+        elif query_lower.startswith(("list ", "list all ")):
+            st.write("**Debug: List query detected - routing to Excel search**")
+            return handle_list_query(query, vectorstore)
+
+        # 5. Document queries (agreements, summaries, etc.) - NON-EXCEL only
+        elif any(
+            phrase in query_lower
+            for phrase in [
+                "summarize",
+                "summary of",
+                "agreement",
+                "contract",
+                "document",
+            ]
+        ):
+            st.write("**Debug: Routing to document handler**")
+            return handle_document_query(query, vectorstore)
+
+        # 6. NEW: Exception queries - "I need all information on" or "Tell me about"
+        elif any(
+            phrase in query_lower
+            for phrase in [
+                "i need all information on",
+                "tell me about",
+                "give me all information on",
+                "show me all information on",
+            ]
+        ):
+            st.write("**Debug: Full information request detected**")
+            return handle_full_information_query(query, vectorstore)
+
+        # 7. Person-specific queries - CHECK IF NAME EXISTS IN DATABASE FIRST
+        else:
+            # Extract potential names from the query
+            words = query.split()
+            skip_words = {
+                "what",
+                "is",
+                "the",
+                "phone",
+                "number",
+                "email",
+                "address",
+                "contact",
+                "info",
+                "information",
+                "about",
+                "tell",
+                "me",
+                "give",
+                "show",
+                "find",
+                "get",
+                "his",
+                "her",
+                "their",
+                "of",
+                "for",
+                "on",
+                "in",
+                "at",
+                "to",
+                "from",
+                "with",
+                "and",
+                "how",
+                "can",
+                "you",
+                "please",
+                "people",
+                "named",
+                "do",
+                "know",
+                "who",
+                "date",
+                "record",
+                "case",
+                "type",
+            }
+
+            potential_names = []
+            i = 0
+            while i < len(words):
+                word = (
+                    words[i]
+                    .replace(",", "")
+                    .replace(".", "")
+                    .replace("?", "")
+                    .replace("'s", "")
+                )
+                if (
+                    word
+                    and len(word) > 1
+                    and word.isalpha()
+                    and word.lower() not in skip_words
+                ):
+                    # Try to build a full name
+                    name_parts = [word.capitalize()]
+                    j = i + 1
+                    while j < len(words) and j < i + 3:  # Max 3 parts
+                        next_word = (
+                            words[j]
+                            .replace(",", "")
+                            .replace(".", "")
+                            .replace("?", "")
+                            .replace("'s", "")
+                        )
+                        if (
+                            next_word
+                            and len(next_word) > 1
+                            and next_word.isalpha()
+                            and next_word.lower() not in skip_words
+                        ):
+                            name_parts.append(next_word.capitalize())
+                            j += 1
+                        else:
+                            break
+
+                    if len(name_parts) >= 2:
+                        potential_names.append(" ".join(name_parts))
+                        i = j
+                    else:
+                        potential_names.append(name_parts[0])
+                        i += 1
+                else:
+                    i += 1
+
+            # Check if any potential names exist in the database
+            if potential_names:
+                all_names = get_all_names_from_vectorstore_improved(vectorstore)
+                name_found_in_db = False
+
+                for search_name in potential_names:
+                    for db_name in all_names:
+                        # Check for exact match or if both first and last name appear
+                        if search_name.lower() == db_name.lower():
+                            name_found_in_db = True
+                            break
+                        # Check if it's a full name (first + last) that exists in DB
+                        elif len(search_name.split()) >= 2:
+                            search_parts = search_name.lower().split()
+                            db_parts = db_name.lower().split()
+                            if (
+                                len(db_parts) >= 2
+                                and search_parts[0] in db_parts
+                                and search_parts[-1] in db_parts
+                            ):
+                                name_found_in_db = True
+                                break
+                    if name_found_in_db:
+                        break
+
+                if name_found_in_db:
+                    # Name exists in database - use person-specific handler (Excel only)
+                    st.write(
+                        "**Debug: Name found in database - routing to person handler**"
+                    )
+                    return handle_specific_person_query(query, vectorstore)
+                else:
+                    # Name not in database - use regular conversation chain (non-Excel documents)
+                    st.write(
+                        "**Debug: Name not found in database - using regular chain**"
+                    )
+                    if "conversation_chain" in st.session_state:
+                        response = st.session_state.conversation_chain(
+                            {"question": query}
+                        )
+                        return response["answer"]
+                    else:
+                        return "I don't have enough context to answer that question."
+            else:
+                # No names detected - use regular conversation chain
+                st.write("**Debug: No names detected - using regular chain**")
+                if "conversation_chain" in st.session_state:
+                    response = st.session_state.conversation_chain({"question": query})
+                    return response["answer"]
+                else:
+                    return "I don't have enough context to answer that question."
+
+    except Exception as e:
+        return f"I encountered an error while processing your question: {str(e)}"
+
+
 def handle_name_listing_query(query: str, vectorstore) -> str:
     """Handle queries asking for lists of people with specific names"""
     try:
@@ -1492,169 +1751,43 @@ def handle_name_listing_query(query: str, vectorstore) -> str:
         return f"Error processing name listing query: {str(e)}"
 
 
-def handle_improved_query_routing(query: str, vectorstore) -> str:
-    """Improved query routing with clearer logic"""
-    try:
-        query_lower = query.lower()
-
-        # 1. EXACT name listing queries (very specific)
-        if any(
-            phrase in query_lower
-            for phrase in [
-                "list all names",
-                "show all names",
-                "all names in database",
-                "list the names",
-                "what names are in",
-            ]
-        ):
-            names = get_all_names_from_vectorstore_improved(vectorstore)
-            if names:
-                return (
-                    f"Here are all {len(names)} names in the database:\n\n"
-                    + "\n".join([f"{i}. {name}" for i, name in enumerate(names, 1)])
-                )
-            else:
-                return "I couldn't find any names in the database."
-
-        # 2. Name count queries
-        elif any(
-            phrase in query_lower
-            for phrase in ["how many names", "count names", "number of names"]
-        ):
-            names = get_all_names_from_vectorstore_improved(vectorstore)
-            return f"There are {len(names)} names in the database."
-
-        # 2.5. NEW: List people with specific first/last name
-        elif any(
-            phrase in query_lower
-            for phrase in [
-                "list all people named",
-                "list people named",
-                "show people named",
-                "all people named",
-                "people with the first name",
-                "people with the last name",
-                "list all the people named",
-                "show all people named",
-            ]
-        ):
-            st.write("**Debug: Routing to name listing handler**")
-            return handle_name_listing_query(query, vectorstore)
-
-        # 3. Document queries (agreements, summaries, etc.)
-        elif any(
-            phrase in query_lower
-            for phrase in [
-                "summarize",
-                "summary of",
-                "agreement",
-                "contract",
-                "document",
-            ]
-        ):
-            st.write("**Debug: Routing to document handler**")
-            return handle_document_query(query, vectorstore)
-
-        # 4. Person-specific queries
-        elif any(
-            phrase in query_lower
-            for phrase in [
-                "phone number",
-                "email",
-                "contact info",
-                "contact",
-                "phone",
-                "email address",
-                "tell me about",
-                "information on",
-                "details on",
-                "about",
-                "what is",
-                "who is",
-                "what do you know about",
-            ]
-        ):
-            words = query.lower().split()
-            skip_words = {
-                "what",
-                "is",
-                "the",
-                "phone",
-                "number",
-                "email",
-                "address",
-                "contact",
-                "info",
-                "information",
-                "about",
-                "tell",
-                "me",
-                "give",
-                "show",
-                "find",
-                "get",
-                "his",
-                "her",
-                "their",
-                "of",
-                "for",
-                "on",
-                "in",
-                "at",
-                "to",
-                "from",
-                "with",
-                "and",
-                "how",
-                "can",
-                "you",
-                "please",
-                "people",
-                "named",
-                "do",
-                "know",
-            }
-
-            potential_names = [
-                word
-                for word in words
-                if word.isalpha() and len(word) > 2 and word not in skip_words
-            ]
-
-            if potential_names:
-                st.write("**Debug: Routing to person handler**")
-                return handle_specific_person_query(query, vectorstore)
-            else:
-                st.write("**Debug: No names detected, using regular chain**")
-                if "conversation_chain" in st.session_state:
-                    response = st.session_state.conversation_chain({"question": query})
-                    return response["answer"]
-                else:
-                    return "I don't have enough context to answer that question."
-
-        # 5. Everything else - use regular conversation chain
-        else:
-            st.write("**Debug: Using regular conversation chain**")
-            if "conversation_chain" in st.session_state:
-                response = st.session_state.conversation_chain({"question": query})
-                return response["answer"]
-            else:
-                return "I don't have enough context to answer that question."
-
-    except Exception as e:
-        return f"I encountered an error while processing your question: {str(e)}"
-
-
 def handle_specific_person_query(query: str, vectorstore) -> str:
-    """Handle queries about specific people - FIXED FOR CASE INSENSITIVITY"""
+    """Handle queries about specific people - ONLY for allowed question types (unless it's a full info request)"""
     try:
         import re
+
+        query_lower = query.lower()
+
+        # Check if this is a full information request (exception to restrictions)
+        is_full_info_request = any(
+            phrase in query_lower
+            for phrase in [
+                "i need all information on",
+                "tell me about",
+                "give me all information on",
+                "show me all information on",
+            ]
+        )
+
+        # Check if the question is asking for allowed information (only if not full info request)
+        if not is_full_info_request:
+            allowed_questions = [
+                "phone",
+                "email",
+                "date",
+                "record",
+                "case type",
+                "contact",
+            ]
+            if not any(allowed in query_lower for allowed in allowed_questions):
+                return "I can only answer questions about a person's phone number, email address, date of record, or case type."
+
+        # Rest of your existing handle_specific_person_query code...
+        # [Keep all the existing code from the original function]
 
         # STEP 1: Extract potential names (case insensitive)
         words = query.split()
         potential_names = []
-
         # Skip obvious non-name words
         skip_words = {
             "what",
@@ -1702,7 +1835,6 @@ def handle_specific_person_query(query: str, vectorstore) -> str:
                 .replace("?", "")
                 .replace("'s", "")
             )
-
             # Check if this could be a name (alphabetic, not a skip word, reasonable length)
             if (
                 word
@@ -1713,7 +1845,6 @@ def handle_specific_person_query(query: str, vectorstore) -> str:
                 # Try to build a full name by looking ahead
                 name_parts = [word.capitalize()]  # Capitalize for consistency
                 j = i + 1
-
                 # Keep adding consecutive potential name words
                 while j < len(words) and j < i + 3:  # Limit to 3 parts max
                     next_word = (
@@ -1733,7 +1864,6 @@ def handle_specific_person_query(query: str, vectorstore) -> str:
                         j += 1
                     else:
                         break
-
                 # Add the name(s) we found
                 if len(name_parts) >= 2:
                     # Add full name
@@ -1767,10 +1897,8 @@ def handle_specific_person_query(query: str, vectorstore) -> str:
 
         # Find matches with priority for exact full name matches
         matched_names = []
-
         for search_name in potential_names:
             st.write(f"**Debug: Searching for '{search_name}'**")
-
             # First, try exact matches (case insensitive)
             for db_name in all_names:
                 if search_name.lower() == db_name.lower():
@@ -1779,7 +1907,6 @@ def handle_specific_person_query(query: str, vectorstore) -> str:
                     # If we found an exact match for a full name, we can stop here
                     if len(search_name.split()) > 1:
                         break
-
             # If we found a full name exact match, don't look for partial matches
             if matched_names and len(search_name.split()) > 1:
                 break
@@ -1811,7 +1938,7 @@ def handle_specific_person_query(query: str, vectorstore) -> str:
         else:
             st.write(f"**Debug: Found {len(matched_names)} matches: {matched_names}**")
 
-        # Get the full records
+        # Get the full records - ONLY FROM EXCEL FILES
         all_content = []
         if hasattr(vectorstore, "docstore") and hasattr(
             vectorstore, "index_to_docstore_id"
@@ -1832,7 +1959,6 @@ def handle_specific_person_query(query: str, vectorstore) -> str:
             if len(name_parts) >= 2:
                 first_name = name_parts[0]
                 last_name = " ".join(name_parts[1:])
-
                 lines = combined_content.split("\n")
                 for i, line in enumerate(lines):
                     if (
@@ -1859,25 +1985,31 @@ def handle_specific_person_query(query: str, vectorstore) -> str:
             )
             records_text = "\n\n".join(found_records)
 
-            # Improved prompt for specific person queries
-            if len(matched_names) == 1:
+            # Different prompts based on whether it's a full info request or restricted
+            if is_full_info_request:
                 prompt = f"""
                 Question: {query}
-                Here is the database record for {matched_names[0]}:
+                Here are the database records:
                 {records_text}
                 
-                Please provide a direct answer to the specific question asked about {matched_names[0]}.
-                If asked for phone number, just give the phone number.
-                If asked for email, just give the email.
-                If asked for general info, provide all details.
+                Please provide ALL available information about the person(s) from the database records.
+                Include phone numbers, email addresses, dates, case types, and any other details available.
                 """
             else:
                 prompt = f"""
                 Question: {query}
-                Here are the database records for the people you asked about:
+                Here is the database record for {matched_names[0] if len(matched_names) == 1 else "the requested people"}:
                 {records_text}
                 
-                Please provide the requested information for each person.
+                IMPORTANT: Only answer questions about:
+                - Phone number
+                - Email address  
+                - Date of record
+                - Case type
+                
+                Please provide a direct answer to the specific question asked.
+                If the question is not about phone number, email, date of record, or case type, 
+                respond with: "I can only provide information about phone numbers, email addresses, dates of records, and case types."
                 """
 
             response = llm.invoke(prompt)
@@ -1890,7 +2022,1057 @@ def handle_specific_person_query(query: str, vectorstore) -> str:
         return f"Error: {str(e)}"
 
 
+def handle_list_query(query: str, vectorstore) -> str:
+    """Handle queries that start with 'list' or 'list all' - use Excel data"""
+    try:
+        query_lower = query.lower()
+
+        # Get all Excel content
+        all_content = []
+        if hasattr(vectorstore, "docstore") and hasattr(
+            vectorstore, "index_to_docstore_id"
+        ):
+            for i in range(len(vectorstore.index_to_docstore_id)):
+                doc_id = vectorstore.index_to_docstore_id.get(i)
+                if doc_id and doc_id in vectorstore.docstore._dict:
+                    doc = vectorstore.docstore._dict[doc_id]
+                    if doc.metadata.get("file_type") in ["xlsx", "xls"]:
+                        all_content.append(doc.page_content)
+
+        if not all_content:
+            return "I couldn't find any Excel data to search through."
+
+        combined_content = "\n".join(all_content)
+
+        # Handle "most recent" queries FIRST (before other case type queries)
+        if "most recent" in query_lower:
+            return find_most_recent_client(query, combined_content)
+
+        # Handle specific list queries with direct processing
+        elif "email" in query_lower:
+            return extract_all_emails(combined_content)
+        elif "case type" in query_lower and "with a case type of" not in query_lower:
+            return extract_all_case_types(combined_content)
+        elif "with a case type of" in query_lower:
+            return find_clients_by_case_type(query, combined_content)
+        else:
+            # For other list queries, use LLM with chunking
+            return process_list_query_with_chunking(query, combined_content)
+
+    except Exception as e:
+        return f"Error processing list query: {str(e)}"
+
+
+def extract_all_emails(content: str) -> str:
+    """Extract all email addresses from Excel content"""
+    import re
+
+    try:
+        # Find all email addresses using regex
+        email_pattern = r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"
+        emails = re.findall(email_pattern, content)
+
+        # Remove duplicates and sort
+        unique_emails = sorted(list(set(emails)))
+
+        if unique_emails:
+            result = f"Found {len(unique_emails)} unique email addresses:\n\n"
+            for i, email in enumerate(unique_emails, 1):
+                result += f"{i}. {email}\n"
+            return result
+        else:
+            return "No email addresses found in the database."
+
+    except Exception as e:
+        return f"Error extracting emails: {str(e)}"
+
+
+def extract_all_case_types(content: str) -> str:
+    """Extract all case types from Excel content by analyzing person records"""
+    try:
+        lines = content.split("\n")
+        case_types = set()
+
+        # Since individual person queries work, let's find all names first
+        # and then extract case types from their records
+
+        # Method 1: Look for any line that contains "Case Type:" or similar patterns
+        for line in lines:
+            line_clean = line.strip()
+            if not line_clean:
+                continue
+
+            # Look for various case type patterns
+            patterns_to_check = [
+                "case type:",
+                "case type =",
+                "type:",
+                "type =",
+                "case:",
+                "case =",
+            ]
+
+            line_lower = line_clean.lower()
+            for pattern in patterns_to_check:
+                if pattern in line_lower:
+                    # Extract everything after the pattern
+                    pattern_index = line_lower.find(pattern)
+                    case_type_part = line_clean[pattern_index + len(pattern) :].strip()
+
+                    # Clean up the case type
+                    case_type_part = (
+                        case_type_part.split(",")[0]
+                        .split("|")[0]
+                        .split("\t")[0]
+                        .strip()
+                    )
+
+                    if case_type_part and len(case_type_part) > 1:
+                        case_types.add(case_type_part)
+
+        # Method 2: Use LLM to extract case types from sample records
+        if len(case_types) < 10:  # If we didn't find many, try LLM approach
+            st.write("**Debug: Using LLM to extract case types from records**")
+
+            # Take samples from different parts of the content
+            content_length = len(content)
+            sample_size = 3000
+            samples = []
+
+            # Take 5 samples from different positions
+            for i in range(5):
+                start_pos = (content_length // 5) * i
+                end_pos = min(start_pos + sample_size, content_length)
+                samples.append(content[start_pos:end_pos])
+
+            llm = ChatGroq(
+                model="llama-3.3-70b-versatile", temperature=0, max_tokens=1000
+            )
+
+            for i, sample in enumerate(samples):
+                prompt = f"""
+                Here is a sample of database records:
+                {sample}
+                
+                Extract ONLY the case types mentioned in these records. 
+                Look for fields like "Case Type:", "Type:", or similar.
+                List each unique case type on a separate line.
+                Do not include names, dates, or other information - only case types.
+                If no case types found, respond with "NONE"
+                """
+
+                try:
+                    response = llm.invoke(prompt)
+                    if (
+                        response.content.strip()
+                        and "NONE" not in response.content.upper()
+                    ):
+                        # Parse the response and add to case_types
+                        extracted_types = response.content.strip().split("\n")
+                        for case_type in extracted_types:
+                            case_type_clean = case_type.strip(" -•*123456789.")
+                            if case_type_clean and len(case_type_clean) > 2:
+                                case_types.add(case_type_clean)
+                except Exception as e:
+                    st.write(f"**Debug: Error processing sample {i + 1}: {str(e)}**")
+                    continue
+
+        # Method 3: If still not enough, look for records and extract case types
+        if len(case_types) < 5:
+            st.write("**Debug: Trying record-by-record extraction**")
+
+            # Look for record patterns and extract case types
+            record_blocks = []
+            current_block = []
+
+            for line in lines:
+                if line.strip():
+                    current_block.append(line)
+                else:
+                    if current_block:
+                        record_blocks.append("\n".join(current_block))
+                        current_block = []
+
+            # Process blocks that look like they contain person data
+            for block in record_blocks[:50]:  # Check first 50 blocks
+                block_lower = block.lower()
+                if any(
+                    indicator in block_lower
+                    for indicator in ["name", "phone", "email", "@"]
+                ):
+                    # This looks like a person record, extract case type
+                    for line in block.split("\n"):
+                        line_lower = line.lower()
+                        if "case" in line_lower and "type" in line_lower:
+                            # Try to extract the case type value
+                            if ":" in line:
+                                parts = line.split(":")
+                                if len(parts) > 1:
+                                    potential_case_type = parts[1].strip()
+                                    if (
+                                        potential_case_type
+                                        and len(potential_case_type) > 2
+                                    ):
+                                        case_types.add(potential_case_type)
+
+        # Clean up and deduplicate case types
+        cleaned_case_types = set()
+        for case_type in case_types:
+            # Remove common false positives
+            case_type_clean = case_type.strip()
+            if (
+                case_type_clean
+                and len(case_type_clean) > 2
+                and case_type_clean.lower()
+                not in [
+                    "case type",
+                    "type",
+                    "case",
+                    "record",
+                    "data",
+                    "info",
+                    "information",
+                ]
+            ):
+                cleaned_case_types.add(case_type_clean)
+
+        unique_case_types = sorted(list(cleaned_case_types))
+
+        st.write(
+            f"**Debug: Found {len(unique_case_types)} case types: {unique_case_types}**"
+        )
+
+        if unique_case_types:
+            result = f"Found {len(unique_case_types)} case types:\n\n"
+            for i, case_type in enumerate(unique_case_types, 1):
+                result += f"{i}. {case_type}\n"
+            return result
+        else:
+            return "No case types found in the database. The data structure might be different than expected."
+
+    except Exception as e:
+        return f"Error extracting case types: {str(e)}"
+
+
+def find_clients_by_case_type(query: str, content: str) -> str:
+    """Find clients with a specific case type"""
+    try:
+        # Check if user wants details (case types shown)
+        if "show case type" in query.lower() or "with case type" in query.lower():
+            return find_clients_by_case_type_with_details(query, content)
+        else:
+            return find_clients_by_case_type_comprehensive(query, content)
+    except Exception as e:
+        return f"Error finding clients by case type: {str(e)}"
+
+
+def find_clients_by_case_type_comprehensive(query: str, content: str) -> str:
+    """More precise case type matching and better name formatting"""
+    try:
+        # Extract the case type from the query
+        query_lower = query.lower()
+        case_type_start = query_lower.find("case type of ") + len("case type of ")
+        case_type = query[case_type_start:].strip().lower()
+
+        st.write(f"**Debug: Looking for case type: '{case_type}'**")
+
+        lines = content.split("\n")
+
+        st.write(f"**Debug: Processing {len(lines)} lines**")
+
+        matching_clients = []
+
+        # Process each line
+        for i, line in enumerate(lines):
+            line_clean = line.strip()
+
+            # Skip empty lines
+            if not line_clean:
+                continue
+
+            line_lower = line_clean.lower()
+
+            # Must start with "Record" and contain case_type field
+            if not line_clean.startswith("Record "):
+                continue
+
+            # More precise case type matching - look specifically in CASE_TYPE field
+            case_type_match = False
+            if "|" in line_clean:
+                parts = line_clean.split("|")
+                for part in parts:
+                    part_clean = part.strip()
+                    if part_clean.upper().startswith("CASE_TYPE:"):
+                        case_type_value = part_clean.split(":", 1)[1].strip().lower()
+                        if case_type in case_type_value:
+                            case_type_match = True
+                            break
+
+            if case_type_match:
+                st.write(f"**Debug: Line {i + 1} contains case type '{case_type}'**")
+
+                # Extract first and last name from this line
+                first_name, last_name = extract_name_from_record_improved(line_clean)
+
+                if first_name and last_name:
+                    full_name = f"{first_name} {last_name}"
+                    matching_clients.append(full_name)
+                    st.write(f"**Debug: Extracted name: '{full_name}'**")
+                else:
+                    st.write(
+                        f"**Debug: Could not extract complete name from line {i + 1} (first: '{first_name}', last: '{last_name}')** "
+                    )
+
+        st.write(f"**Debug: Found {len(matching_clients)} matching clients**")
+
+        # Remove duplicates and sort
+        unique_clients = sorted(list(set(matching_clients)))
+
+        if unique_clients:
+            result = (
+                f"Found {len(unique_clients)} clients with case type '{case_type}':\n\n"
+            )
+            for i, client in enumerate(unique_clients, 1):
+                result += f"{i}. {client}\n"
+            return result
+        else:
+            return f"No clients found with case type '{case_type}'"
+
+    except Exception as e:
+        return f"Error in comprehensive case type search: {str(e)}"
+
+
+def extract_name_from_record_improved(record: str) -> tuple:
+    """Extract first and last name with proper capitalization"""
+    try:
+        first_name = None
+        last_name = None
+
+        # The record is on a single line with pipe delimiters
+        if "|" in record:
+            parts = record.split("|")
+            for part in parts:
+                part = part.strip()
+
+                # Handle first name (might be in format "Record X: FIRST_NAME: John")
+                if "FIRST_NAME:" in part.upper():
+                    # Split by FIRST_NAME: and take the part after it
+                    first_name_split = part.upper().split("FIRST_NAME:")
+                    if len(first_name_split) > 1:
+                        first_name_raw = first_name_split[1].strip()
+                        # Convert to proper case (capitalize first letter, rest lowercase)
+                        first_name = first_name_raw.capitalize()
+
+                # Handle last name (format "LAST_NAME: Smith")
+                elif part.upper().startswith("LAST_NAME:"):
+                    last_name_raw = part.split(":", 1)[1].strip()
+                    # Convert to proper case
+                    last_name = last_name_raw.capitalize()
+
+        return first_name, last_name
+
+    except Exception as e:
+        return None, None
+
+
+def find_clients_by_case_type_with_details(query: str, content: str) -> str:
+    """Find clients and show their case types - corrected pipe-delimited format"""
+    try:
+        # Extract the case type from the query
+        query_lower = query.lower()
+        case_type_start = query_lower.find("case type of ") + len("case type of ")
+        case_type = query[case_type_start:].strip().lower()
+
+        st.write(f"**Debug: Looking for case type: '{case_type}' with details**")
+
+        lines = content.split("\n")
+        matching_clients = []
+
+        # Process each line
+        for i, line in enumerate(lines):
+            line_clean = line.strip()
+
+            if not line_clean:
+                continue
+
+            line_lower = line_clean.lower()
+
+            # Check if this line contains our target case type
+            if (
+                case_type in line_lower
+                and "case_type:" in line_lower
+                and line_clean.startswith("Record ")
+            ):
+                # Extract details from this line
+                first_name = None
+                last_name = None
+                actual_case_type = None
+
+                if "|" in line_clean:
+                    parts = line_clean.split("|")
+                    for part in parts:
+                        part = part.strip()
+
+                        # Handle first name
+                        if "FIRST_NAME:" in part.upper():
+                            first_name_split = part.upper().split("FIRST_NAME:")
+                            if len(first_name_split) > 1:
+                                first_name = first_name_split[1].strip()
+
+                        # Handle last name
+                        elif part.upper().startswith("LAST_NAME:"):
+                            last_name = part.split(":", 1)[1].strip()
+
+                        # Handle case type
+                        elif part.upper().startswith("CASE_TYPE:"):
+                            actual_case_type = part.split(":", 1)[1].strip()
+
+                if first_name and last_name and actual_case_type:
+                    full_name = f"{first_name} {last_name}"
+                    matching_clients.append(
+                        {"name": full_name, "case_type": actual_case_type}
+                    )
+
+        # Remove duplicates based on name
+        seen_names = set()
+        unique_clients = []
+        for client in matching_clients:
+            if client["name"] not in seen_names:
+                seen_names.add(client["name"])
+                unique_clients.append(client)
+
+        # Sort by name
+        unique_clients.sort(key=lambda x: x["name"])
+
+        if unique_clients:
+            result = f"Found {len(unique_clients)} clients with case type containing '{case_type}':\n\n"
+            for i, client in enumerate(unique_clients, 1):
+                result += f"{i}. {client['name']} - {client['case_type']}\n"
+            return result
+        else:
+            return f"No clients found with case type containing '{case_type}'"
+
+    except Exception as e:
+        return f"Error finding clients with details: {str(e)}"
+
+
+def find_clients_by_case_type_llm_fallback_improved(
+    case_type: str, content: str
+) -> str:
+    """Improved LLM fallback that processes smaller chunks more systematically"""
+    try:
+        st.write(f"**Debug: Using improved LLM fallback for case type: '{case_type}'**")
+
+        llm = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            temperature=0,
+            max_tokens=2000,  # Smaller response to focus on names only
+        )
+
+        # Use smaller chunks to ensure complete processing
+        chunk_size = 8000  # Reduced chunk size
+        content_chunks = [
+            content[i : i + chunk_size] for i in range(0, len(content), chunk_size)
+        ]
+
+        all_clients = []
+
+        for i, chunk in enumerate(content_chunks):
+            st.write(
+                f"**Debug: Processing chunk {i + 1}/{len(content_chunks)} (length: {len(chunk)})**"
+            )
+
+            prompt = f"""
+            Find clients with case type containing "{case_type}".
+            
+            Data chunk {i + 1}/{len(content_chunks)}:
+            {chunk}
+            
+            Rules:
+            - Return ONLY client names (first and last name)
+            - One name per line
+            - No explanations or commentary
+            - If no matches: return "NO_MATCHES"
+            
+            Names:
+            """
+
+            try:
+                response = llm.invoke(prompt)
+                response_lines = response.content.strip().split("\n")
+
+                for line in response_lines:
+                    line_clean = line.strip()
+
+                    if "NO_MATCHES" in line_clean.upper():
+                        continue
+
+                    # Remove numbering
+                    if ". " in line_clean:
+                        line_clean = line_clean.split(". ", 1)[1]
+
+                    # Validate it looks like a name
+                    words = line_clean.split()
+                    if (
+                        len(words) >= 2
+                        and len(words) <= 4
+                        and all(
+                            word.replace("'", "").replace("-", "").isalpha()
+                            for word in words
+                        )
+                        and len(line_clean) < 50
+                    ):
+                        all_clients.append(line_clean)
+
+                st.write(
+                    f"**Debug: Chunk {i + 1} yielded {len([l for l in response_lines if l.strip() and 'NO_MATCHES' not in l.upper()])} names**"
+                )
+
+            except Exception as e:
+                st.write(f"**Debug: Error in chunk {i + 1}: {str(e)}**")
+                continue
+
+        # Remove duplicates
+        unique_clients = sorted(list(set(all_clients)))
+
+        st.write(f"**Debug: LLM fallback found {len(unique_clients)} unique clients**")
+
+        if unique_clients:
+            result = f"Found {len(unique_clients)} clients with case type containing '{case_type}':\n\n"
+            for i, client in enumerate(unique_clients, 1):
+                result += f"{i}. {client}\n"
+            return result
+        else:
+            return f"No clients found with case type containing '{case_type}'"
+
+    except Exception as e:
+        return f"Error in LLM fallback: {str(e)}"
+
+
+def extract_name_from_record(record: str) -> tuple:
+    """Extract first and last name from a pipe-delimited record"""
+    try:
+        first_name = None
+        last_name = None
+
+        # The record is on a single line with pipe delimiters
+        if "|" in record:
+            parts = record.split("|")
+            for part in parts:
+                part = part.strip()
+
+                # Handle first name (might be in format "Record X: FIRST_NAME: John")
+                if "FIRST_NAME:" in part.upper():
+                    # Split by FIRST_NAME: and take the part after it
+                    first_name_split = part.upper().split("FIRST_NAME:")
+                    if len(first_name_split) > 1:
+                        first_name = first_name_split[1].strip()
+
+                # Handle last name (format "LAST_NAME: Smith")
+                elif part.upper().startswith("LAST_NAME:"):
+                    last_name = part.split(":", 1)[1].strip()
+
+        return first_name, last_name
+
+    except Exception as e:
+        return None, None
+
+
+def process_case_type_in_chunks(case_type: str, content: str) -> str:
+    """Process case type search in chunks when content is too large"""
+    try:
+        chunk_size = 15000
+        chunks = [
+            content[i : i + chunk_size] for i in range(0, len(content), chunk_size)
+        ]
+
+        llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0, max_tokens=4096)
+
+        all_clients = []
+
+        for i, chunk in enumerate(chunks):
+            prompt = f"""
+            Find clients with case type containing "{case_type}" in this data chunk {i + 1}/{len(chunks)}:
+            
+            {chunk}
+            
+            Return only the names, one per line. If no matches, return "NO_MATCHES".
+            """
+
+            response = llm.invoke(prompt)
+            if "NO_MATCHES" not in response.content:
+                chunk_clients = [
+                    line.strip()
+                    for line in response.content.split("\n")
+                    if line.strip()
+                ]
+                all_clients.extend(chunk_clients)
+
+        # Remove duplicates
+        unique_clients = list(set(all_clients))
+
+        if unique_clients:
+            result = f"Found {len(unique_clients)} clients with case type containing '{case_type}':\n\n"
+            for i, client in enumerate(sorted(unique_clients), 1):
+                result += f"{i}. {client}\n"
+            return result
+        else:
+            return f"No clients found with case type containing '{case_type}'"
+
+    except Exception as e:
+        return f"Error processing chunks: {str(e)}"
+
+
+def find_most_recent_client(query: str, content: str) -> str:
+    """Find the most recent client with specific criteria - updated for pipe format"""
+    try:
+        # Extract case type if specified
+        case_type = None
+        if "case type of" in query.lower():
+            case_type_start = query.lower().find("case type of ") + len("case type of ")
+            case_type = query[case_type_start:].strip().lower()
+
+        st.write(
+            f"**Debug: Looking for most recent client with case type: '{case_type}'**"
+        )
+
+        lines = content.split("\n")
+        matching_records = []
+
+        # Find all records with the specified case type
+        for i, line in enumerate(lines):
+            line_clean = line.strip()
+
+            if not line_clean or not line_clean.startswith("Record "):
+                continue
+
+            line_lower = line_clean.lower()
+
+            # More precise case type matching - look specifically in CASE_TYPE field
+            case_type_match = False
+            if "|" in line_clean:
+                parts = line_clean.split("|")
+                for part in parts:
+                    part_clean = part.strip()
+                    if part_clean.upper().startswith("CASE_TYPE:"):
+                        case_type_value = part_clean.split(":", 1)[1].strip().lower()
+                        if case_type and case_type in case_type_value:
+                            case_type_match = True
+                            break
+
+            if case_type_match:
+                # Extract name, date, and case type from this line
+                first_name = None
+                last_name = None
+                date_found = None
+                actual_case_type = None
+
+                if "|" in line_clean:
+                    parts = line_clean.split("|")
+                    for part in parts:
+                        part = part.strip()
+
+                        # Extract first name
+                        if "FIRST_NAME:" in part.upper():
+                            first_name_split = part.upper().split("FIRST_NAME:")
+                            if len(first_name_split) > 1:
+                                first_name = first_name_split[1].strip().capitalize()
+
+                        # Extract last name
+                        elif part.upper().startswith("LAST_NAME:"):
+                            last_name = part.split(":", 1)[1].strip().capitalize()
+
+                        # Extract date
+                        elif part.upper().startswith("DATE:"):
+                            date_found = part.split(":", 1)[1].strip()
+
+                        # Extract case type
+                        elif part.upper().startswith("CASE_TYPE:"):
+                            actual_case_type = part.split(":", 1)[1].strip()
+
+                if first_name and last_name and date_found:
+                    full_name = f"{first_name} {last_name}"
+                    matching_records.append(
+                        {
+                            "name": full_name,
+                            "date": date_found,
+                            "case_type": actual_case_type,
+                            "date_for_sorting": parse_date_for_sorting(date_found),
+                        }
+                    )
+
+        st.write(
+            f"**Debug: Found {len(matching_records)} records with names and dates**"
+        )
+
+        if matching_records:
+            # Sort by date (most recent first)
+            matching_records.sort(key=lambda x: x["date_for_sorting"], reverse=True)
+
+            most_recent = matching_records[0]
+            return f"Most recent client with case type '{case_type}':\n\n{most_recent['name']} (Date: {most_recent['date']}, Case Type: {most_recent['case_type']})"
+        else:
+            return f"No clients found with case type '{case_type}' that have complete name and date information."
+
+    except Exception as e:
+        return f"Error finding most recent client: {str(e)}"
+
+
+def parse_date_for_sorting(date_str: str):
+    """Convert date string to a format suitable for sorting"""
+    try:
+        import datetime
+
+        # Try different date formats
+        formats = [
+            "%m/%d/%Y",
+            "%m-%d-%Y",
+            "%Y/%m/%d",
+            "%Y-%m-%d",
+            "%m/%d/%y",
+            "%m-%d-%y",
+        ]
+
+        for fmt in formats:
+            try:
+                return datetime.datetime.strptime(date_str, fmt)
+            except ValueError:
+                continue
+
+        # If no format works, return a default old date
+        return datetime.datetime(1900, 1, 1)
+    except:
+        return datetime.datetime(1900, 1, 1)
+
+
+def process_list_query_with_chunking(query: str, content: str) -> str:
+    """Process list queries by chunking large content"""
+    try:
+        # Split content into manageable chunks
+        chunk_size = 8000
+        content_chunks = [
+            content[i : i + chunk_size] for i in range(0, len(content), chunk_size)
+        ]
+
+        st.write(f"**Debug: Processing {len(content_chunks)} chunks**")
+
+        llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0, max_tokens=4096)
+
+        all_results = []
+
+        for i, chunk in enumerate(content_chunks):
+            st.write(f"**Debug: Processing chunk {i + 1}/{len(content_chunks)}**")
+
+            prompt = f"""
+            Question: {query}
+            
+            Here is a portion of the database content:
+            {chunk}
+            
+            Instructions:
+            - This is a list query, so provide a list format response
+            - Search through this data portion to find records that match the criteria
+            - Extract relevant information and format as a list
+            - If no matches in this portion, respond with "No matches in this section"
+            
+            Answer:
+            """
+
+            response = llm.invoke(prompt)
+            if (
+                response.content.strip()
+                and "No matches in this section" not in response.content
+            ):
+                all_results.append(response.content)
+
+        if all_results:
+            # Combine and deduplicate results
+            combined_prompt = f"""
+            Original query: {query}
+            
+            Here are results from different sections of the database:
+            
+            {chr(10).join([f"=== Section {i + 1} ==={chr(10)}{result}" for i, result in enumerate(all_results)])}
+            
+            Please combine these results, remove duplicates, and provide a final consolidated list.
+            Count the total number of unique items found.
+            """
+
+            final_response = llm.invoke(combined_prompt)
+            return final_response.content
+        else:
+            return f"No results found for: {query}"
+
+    except Exception as e:
+        return f"Error processing query with chunking: {str(e)}"
+
+
+def handle_full_information_query(query: str, vectorstore) -> str:
+    """Handle 'tell me about' or 'all information on' queries - combine Excel + other docs"""
+    try:
+        # Extract potential names from the query
+        words = query.split()
+        skip_words = {
+            "i",
+            "need",
+            "all",
+            "information",
+            "on",
+            "tell",
+            "me",
+            "about",
+            "give",
+            "show",
+            "the",
+            "what",
+            "is",
+            "and",
+            "or",
+            "a",
+            "an",
+            "to",
+            "from",
+            "with",
+        }
+
+        potential_names = []
+        i = 0
+        while i < len(words):
+            word = (
+                words[i]
+                .replace(",", "")
+                .replace(".", "")
+                .replace("?", "")
+                .replace("'s", "")
+            )
+            if (
+                word
+                and len(word) > 1
+                and word.isalpha()
+                and word.lower() not in skip_words
+            ):
+                name_parts = [word.capitalize()]
+                j = i + 1
+                while j < len(words) and j < i + 3:
+                    next_word = (
+                        words[j]
+                        .replace(",", "")
+                        .replace(".", "")
+                        .replace("?", "")
+                        .replace("'s", "")
+                    )
+                    if (
+                        next_word
+                        and len(next_word) > 1
+                        and next_word.isalpha()
+                        and next_word.lower() not in skip_words
+                    ):
+                        name_parts.append(next_word.capitalize())
+                        j += 1
+                    else:
+                        break
+
+                if len(name_parts) >= 2:
+                    potential_names.append(" ".join(name_parts))
+                    i = j
+                else:
+                    potential_names.append(name_parts[0])
+                    i += 1
+            else:
+                i += 1
+
+        if not potential_names:
+            return "I couldn't identify any names in your query. Please specify who you want information about."
+
+        st.write(f"**Debug: Looking for full information on: {potential_names}**")
+
+        # Check if names exist in database
+        all_names = get_all_names_from_vectorstore_improved(vectorstore)
+        matched_names = []
+
+        for search_name in potential_names:
+            for db_name in all_names:
+                if search_name.lower() == db_name.lower():
+                    matched_names.append(db_name)
+                    break
+                elif len(search_name.split()) >= 2:
+                    search_parts = search_name.lower().split()
+                    db_parts = db_name.lower().split()
+                    if (
+                        len(db_parts) >= 2
+                        and search_parts[0] in db_parts
+                        and search_parts[-1] in db_parts
+                    ):
+                        matched_names.append(db_name)
+                        break
+
+        response_parts = []
+
+        # If name found in database, get Excel data
+        if matched_names:
+            st.write("**Debug: Name found - getting Excel data**")
+            excel_info = handle_specific_person_query_full(
+                query, vectorstore, matched_names
+            )
+            response_parts.append("=== DATABASE INFORMATION ===")
+            response_parts.append(excel_info)
+
+        # Always get regular conversation chain data for full information requests
+        st.write("**Debug: Getting additional document information**")
+        if "conversation_chain" in st.session_state:
+            regular_response = st.session_state.conversation_chain({"question": query})
+            response_parts.append("=== ADDITIONAL DOCUMENT INFORMATION ===")
+            response_parts.append(regular_response["answer"])
+
+        if response_parts:
+            return "\n\n".join(response_parts)
+        else:
+            return f"I couldn't find comprehensive information about {potential_names}."
+
+    except Exception as e:
+        return f"Error processing full information query: {str(e)}"
+
+
+def handle_specific_person_query_full(
+    query: str, vectorstore, matched_names: list
+) -> str:
+    """Get full person data without restrictions for 'tell me about' queries"""
+    try:
+        # Get all Excel content
+        all_content = []
+        if hasattr(vectorstore, "docstore") and hasattr(
+            vectorstore, "index_to_docstore_id"
+        ):
+            for i in range(len(vectorstore.index_to_docstore_id)):
+                doc_id = vectorstore.index_to_docstore_id.get(i)
+                if doc_id and doc_id in vectorstore.docstore._dict:
+                    doc = vectorstore.docstore._dict[doc_id]
+                    if doc.metadata.get("file_type") in ["xlsx", "xls"]:
+                        all_content.append(doc.page_content)
+
+        combined_content = "\n".join(all_content)
+
+        # Find records for matched names
+        found_records = []
+        for name in matched_names:
+            name_parts = name.split()
+            if len(name_parts) >= 2:
+                first_name = name_parts[0]
+                last_name = " ".join(name_parts[1:])
+                lines = combined_content.split("\n")
+                for i, line in enumerate(lines):
+                    if (
+                        first_name.lower() in line.lower()
+                        and last_name.lower() in line.lower()
+                    ):
+                        record_lines = []
+                        for j in range(i, min(i + 10, len(lines))):
+                            record_lines.append(lines[j])
+                            if j > i and (
+                                "Record " in lines[j]
+                                and any(
+                                    name_part in lines[j]
+                                    for name_part in [first_name, last_name]
+                                )
+                            ):
+                                break
+                        found_records.append("\n".join(record_lines))
+                        break
+
+        if found_records:
+            llm = ChatGroq(
+                model="llama-3.3-70b-versatile", temperature=0, max_tokens=4096
+            )
+            records_text = "\n\n".join(found_records)
+
+            prompt = f"""
+            Question: {query}
+            Here are the database records:
+            {records_text}
+            
+            Please provide ALL available information about the person(s) from the database records.
+            Include phone numbers, email addresses, dates, case types, and any other details available.
+            """
+
+            response = llm.invoke(prompt)
+            return response.content
+        else:
+            return f"Found matching names {matched_names} but couldn't retrieve their records from the database."
+
+    except Exception as e:
+        return f"Error retrieving full person information: {str(e)}"
+
+
 def handle_document_query(query: str, vectorstore) -> str:
+    """Handle document-specific queries like summarization"""
+    try:
+        # Use a focused retrieval strategy for document queries
+        retriever = vectorstore.as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": 15},  # Get top 15 most relevant chunks
+        )
+
+        # Get relevant documents
+        relevant_docs = retriever.get_relevant_documents(query)
+
+        if not relevant_docs:
+            return "I couldn't find any relevant documents for your query."
+
+        # Show debug info
+        st.write(f"**Debug: Found {len(relevant_docs)} relevant chunks**")
+
+        # Group documents by source
+        docs_by_source = {}
+        for doc in relevant_docs:
+            source = doc.metadata.get("source", "unknown")
+            file_name = doc.metadata.get("file_name", os.path.basename(source))
+
+            if file_name not in docs_by_source:
+                docs_by_source[file_name] = []
+            docs_by_source[file_name].append(doc)
+
+        st.write(f"**Debug: Documents involved: {list(docs_by_source.keys())}**")
+
+        # Combine content from relevant documents
+        combined_content = []
+        for file_name, docs in docs_by_source.items():
+            combined_content.append(f"\n=== FROM DOCUMENT: {file_name} ===")
+            for doc in docs:
+                combined_content.append(doc.page_content[:1000])  # Limit chunk size
+
+        content_text = "\n".join(combined_content)
+
+        # Create focused prompt
+        llm = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            temperature=0,
+            max_tokens=4096,
+        )
+
+        prompt = f"""
+Based on the following document content, please answer this question: {query}
+
+Document Content:
+{content_text[:20000]}  # Limit total content to avoid token limits
+
+Instructions:
+- Answer based ONLY on the provided document content
+- If you're asked to summarize a specific agreement, look for that document in the content above
+- Be specific about which document you're referencing
+- If you can't find the specific document mentioned, say so clearly
+- Provide detailed information from the relevant document(s)
+
+Answer:
+"""
+
+        response = llm.invoke(prompt)
+        return response.content
+
+    except Exception as e:
+        return f"Error processing document query: {str(e)}"
+
+    ###################### Query CONFIGURATION (end) #########################
+
     """Handle document-specific queries like summarization"""
     try:
         # Use a focused retrieval strategy for document queries
