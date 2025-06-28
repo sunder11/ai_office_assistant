@@ -64,7 +64,9 @@ target/
 *.rdb
 *.json
 *.csv
-*.index
+index.faiss
+index.pkl
+session.pkl
 
 
 # Pycharm
