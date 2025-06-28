@@ -3003,144 +3003,185 @@ def handle_specific_person_query_full(
         return f"Error retrieving full person information: {str(e)}"
 
 
+###################### Query CONFIGURATION (end) #########################
+
+
 def handle_document_query(query: str, vectorstore) -> str:
-    """Handle document-specific queries like summarization"""
+    """Handle document-specific queries like summarization with better content retrieval"""
     try:
-        # Use a focused retrieval strategy for document queries
+        # Use a more comprehensive retrieval strategy for document queries
         retriever = vectorstore.as_retriever(
             search_type="similarity",
-            search_kwargs={"k": 15},  # Get top 15 most relevant chunks
+            search_kwargs={"k": 25},  # Get more chunks for comprehensive coverage
         )
 
         # Get relevant documents
         relevant_docs = retriever.get_relevant_documents(query)
-
         if not relevant_docs:
             return "I couldn't find any relevant documents for your query."
 
-        # Show debug info
-        st.write(f"**Debug: Found {len(relevant_docs)} relevant chunks**")
-
-        # Group documents by source
-        docs_by_source = {}
+        # Filter out Excel files - only use PDF, DOCX, HTML, TXT files
+        document_docs = []
         for doc in relevant_docs:
+            file_type = doc.metadata.get("file_type", "").lower()
+            if file_type not in ["xlsx", "xls"]:  # Exclude Excel files
+                document_docs.append(doc)
+
+        if not document_docs:
+            return "I couldn't find any relevant non-Excel documents for your query."
+
+        # Group documents by source and get more complete content
+        docs_by_source = {}
+        for doc in document_docs:
             source = doc.metadata.get("source", "unknown")
             file_name = doc.metadata.get("file_name", os.path.basename(source))
-
             if file_name not in docs_by_source:
                 docs_by_source[file_name] = []
             docs_by_source[file_name].append(doc)
 
-        st.write(f"**Debug: Documents involved: {list(docs_by_source.keys())}**")
-
-        # Combine content from relevant documents
+        # Combine content from relevant documents with larger chunks
         combined_content = []
         for file_name, docs in docs_by_source.items():
             combined_content.append(f"\n=== FROM DOCUMENT: {file_name} ===")
             for doc in docs:
-                combined_content.append(doc.page_content[:1000])  # Limit chunk size
+                # Use full content instead of truncating to 1000 chars
+                combined_content.append(doc.page_content)
 
         content_text = "\n".join(combined_content)
 
-        # Create focused prompt
-        llm = ChatGroq(
-            model="llama-3.3-70b-versatile",
-            temperature=0,
-            max_tokens=4096,
-        )
+        # Process in chunks if content is too large
+        max_content_length = 25000  # Adjust based on model limits
 
-        prompt = f"""
-Based on the following document content, please answer this question: {query}
-
-Document Content:
-{content_text[:20000]}  # Limit total content to avoid token limits
-
-Instructions:
-- Answer based ONLY on the provided document content
-- If you're asked to summarize a specific agreement, look for that document in the content above
-- Be specific about which document you're referencing
-- If you can't find the specific document mentioned, say so clearly
-- Provide detailed information from the relevant document(s)
-
-Answer:
-"""
-
-        response = llm.invoke(prompt)
-        return response.content
+        if len(content_text) > max_content_length:
+            return process_large_document_query(query, content_text, docs_by_source)
+        else:
+            return process_single_document_query(query, content_text)
 
     except Exception as e:
         return f"Error processing document query: {str(e)}"
 
-    ###################### Query CONFIGURATION (end) #########################
 
-    """Handle document-specific queries like summarization"""
-    try:
-        # Use a focused retrieval strategy for document queries
-        retriever = vectorstore.as_retriever(
-            search_type="similarity",
-            search_kwargs={"k": 15},  # Get top 15 most relevant chunks
-        )
+def process_single_document_query(query: str, content_text: str) -> str:
+    """Process document query when content fits in single request"""
+    llm = ChatGroq(
+        model="llama-3.3-70b-versatile",
+        temperature=0,
+        max_tokens=4096,
+    )
 
-        # Get relevant documents
-        relevant_docs = retriever.get_relevant_documents(query)
-
-        if not relevant_docs:
-            return "I couldn't find any relevant documents for your query."
-
-        # Show debug info
-        st.write(f"**Debug: Found {len(relevant_docs)} relevant chunks**")
-
-        # Group documents by source
-        docs_by_source = {}
-        for doc in relevant_docs:
-            source = doc.metadata.get("source", "unknown")
-            file_name = doc.metadata.get("file_name", os.path.basename(source))
-
-            if file_name not in docs_by_source:
-                docs_by_source[file_name] = []
-            docs_by_source[file_name].append(doc)
-
-        st.write(f"**Debug: Documents involved: {list(docs_by_source.keys())}**")
-
-        # Combine content from relevant documents
-        combined_content = []
-        for file_name, docs in docs_by_source.items():
-            combined_content.append(f"\n=== FROM DOCUMENT: {file_name} ===")
-            for doc in docs:
-                combined_content.append(doc.page_content[:1000])  # Limit chunk size
-
-        content_text = "\n".join(combined_content)
-
-        # Create focused prompt
-        llm = ChatGroq(
-            model="llama-3.3-70b-versatile",
-            temperature=0,
-            max_tokens=4096,
-        )
-
-        prompt = f"""
+    prompt = f"""
 Based on the following document content, please answer this question: {query}
 
 Document Content:
-{content_text[:20000]}  # Limit total content to avoid token limits
+{content_text}
 
 Instructions:
 - Answer based ONLY on the provided document content
-- If you're asked to summarize a specific agreement, look for that document in the content above
+- If you're asked to summarize a specific agreement, provide all available details
+- If you're asked for specific paragraphs (like ordered, adjudged, decreed), list them completely
 - Be specific about which document you're referencing
 - If you can't find the specific document mentioned, say so clearly
 - Provide detailed information from the relevant document(s)
+- Do NOT reference any Excel or database records
 
 Answer:
 """
 
-        response = llm.invoke(prompt)
-        return response.content
+    response = llm.invoke(prompt)
+    return response.content
 
-    except Exception as e:
-        return f"Error processing document query: {str(e)}"
 
-    ###################### Query CONFIGURATION (end) #########################
+def process_large_document_query(
+    query: str, content_text: str, docs_by_source: dict
+) -> str:
+    """Process document query when content is too large for single request"""
+    llm = ChatGroq(
+        model="llama-3.3-70b-versatile",
+        temperature=0,
+        max_tokens=4096,
+    )
+
+    # Process each document separately
+    document_summaries = []
+
+    for file_name, docs in docs_by_source.items():
+        doc_content = "\n".join([doc.page_content for doc in docs])
+
+        # Chunk large documents
+        chunk_size = 15000
+        if len(doc_content) > chunk_size:
+            chunks = [
+                doc_content[i : i + chunk_size]
+                for i in range(0, len(doc_content), chunk_size)
+            ]
+            chunk_results = []
+
+            for i, chunk in enumerate(chunks):
+                prompt = f"""
+Based on this portion of document "{file_name}", answer: {query}
+
+Document chunk {i + 1}/{len(chunks)}:
+{chunk}
+
+Instructions:
+- Focus on answering the specific question asked
+- If this chunk contains relevant information, extract it completely
+- If no relevant information in this chunk, respond with "No relevant information in this section"
+
+Answer:
+"""
+                response = llm.invoke(prompt)
+                if "No relevant information in this section" not in response.content:
+                    chunk_results.append(response.content)
+
+            if chunk_results:
+                # Combine chunk results
+                combined_prompt = f"""
+These are results from different sections of document "{file_name}" for the query: {query}
+
+{chr(10).join([f"Section {i + 1}: {result}" for i, result in enumerate(chunk_results)])}
+
+Please combine these results into a comprehensive answer, removing any duplicates.
+"""
+                final_response = llm.invoke(combined_prompt)
+                document_summaries.append(
+                    f"From {file_name}:\n{final_response.content}"
+                )
+        else:
+            # Process entire document at once
+            prompt = f"""
+Based on document "{file_name}", answer: {query}
+
+Document content:
+{doc_content}
+
+Instructions:
+- Provide a complete and detailed answer
+- Include all relevant information from this document
+
+Answer:
+"""
+            response = llm.invoke(prompt)
+            document_summaries.append(f"From {file_name}:\n{response.content}")
+
+    # Combine all document results
+    if len(document_summaries) > 1:
+        final_prompt = f"""
+Here are results from multiple documents for the query: {query}
+
+{chr(10).join(document_summaries)}
+
+Please provide a comprehensive final answer combining information from all documents.
+"""
+        final_response = llm.invoke(final_prompt)
+        return final_response.content
+    elif document_summaries:
+        return document_summaries[0]
+    else:
+        return "No relevant information found in the documents."
+
+
+###################### Query CONFIGURATION (end) #########################
 
 
 def process_pdf_with_ocr(file_path: str) -> Document:
