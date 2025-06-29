@@ -3370,8 +3370,8 @@ with html_options_col:
     max_html_files = st.slider(
         "Max HTML files",
         min_value=1,
-        max_value=100,
-        value=50,
+        max_value=200,
+        value=150,
         help="Limit the number of HTML files to process",
     )
 
@@ -3386,8 +3386,8 @@ with docx_options_col:
     max_docx_files = st.slider(
         "Max DOCX files",
         min_value=1,
-        max_value=100,
-        value=50,
+        max_value=200,
+        value=150,
         help="Limit the number of DOCX files to process",
     )
 
@@ -3402,8 +3402,8 @@ with pdf_options_col:
     max_pdf_files = st.slider(
         "Max PDF files",
         min_value=1,
-        max_value=100,
-        value=75,
+        max_value=200,
+        value=150,
         help="Limit the number of PDF files to process",
     )
 
