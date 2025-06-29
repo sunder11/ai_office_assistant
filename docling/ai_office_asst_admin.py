@@ -3403,7 +3403,7 @@ with pdf_options_col:
         "Max PDF files",
         min_value=1,
         max_value=100,
-        value=50,
+        value=75,
         help="Limit the number of PDF files to process",
     )
 
