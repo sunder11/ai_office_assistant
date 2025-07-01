@@ -3003,9 +3003,6 @@ def handle_specific_person_query_full(
         return f"Error retrieving full person information: {str(e)}"
 
 
-###################### Query CONFIGURATION (end) #########################
-
-
 def handle_document_query(query: str, vectorstore) -> str:
     """Handle document-specific queries like summarization with better content retrieval"""
     try:
@@ -3379,7 +3376,7 @@ with html_options_col:
 docx_col, docx_options_col = st.columns([3, 1])
 with docx_col:
     docx_dir = st.text_input(
-        "Enter path to DOCX files directory:  /mnt/c/AI/Add/docx",
+        "Enter path to DOCX files directory:  /mnt/c/AI/Add/docx - /mnt/c/AI/Add/docx",
         placeholder="e.g., C:/Documents/docx_files or /home/user/docx_files",
     )
 with docx_options_col:
